@@ -1,4 +1,5 @@
 #include "Bloom.h"
+#include "Deferred.h"
 #include "Globals.h"
 #include <imgui.h>
 #include <DDSTextureLoader.h>
@@ -134,6 +135,9 @@ void Bloom::RenderBloom(ID3D11ShaderResourceView* preTonemapSRV, uint32_t width,
 
 	context->CSSetShader(shader, nullptr, 0);
 
+	ID3D11SamplerState* sampler = Deferred::GetSingleton()->linearSampler;
+	context->CSSetSamplers(0, 1, &sampler);
+
 	// Pass 0: Highlight Extract & Downsample
 	{
 		BloomParams params{
@@ -261,4 +265,6 @@ void Bloom::RenderBloom(ID3D11ShaderResourceView* preTonemapSRV, uint32_t width,
 	context->CSSetShader(nullptr, nullptr, 0);
 	ID3D11Buffer* nullCB = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullCB);
+	ID3D11SamplerState* nullSampler = nullptr;
+	context->CSSetSamplers(0, 1, &nullSampler);
 }

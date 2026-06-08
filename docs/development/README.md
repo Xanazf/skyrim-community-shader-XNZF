@@ -4,6 +4,7 @@
 
 -   **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
+-   **[Custom Postprocess Shader](./custom-postprocess-shader.md)** - Writing a `Data\Shaders\PostProcess.hlsl` for the Post Process Overlay's custom postpass
 
 ## Quick Links
 

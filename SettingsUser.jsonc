@@ -1,0 +1,729 @@
+// ============================================================================
+// SettingsUser.jsonc — annotated reference for Community Shaders' user
+// settings file.
+//
+// THIS FILE IS DOCUMENTATION ONLY. The game never reads it. The real,
+// comment-less file lives at:
+//
+//     <Skyrim Data>/SKSE/Plugins/CommunityShaders/SettingsUser.json
+//
+// and is fully generated/rewritten by the plugin itself — by State::Save()
+// (top-level keys: Menu/Advanced/General/Upscaling/Replace Original
+// Shaders/Disable at Boot/Version) and by each Feature::SaveSettings()
+// (one block per loaded feature, keyed by the feature's display name). It is
+// (re)written on first launch and whenever you change something in the
+// in-game menu, so you should essentially never need to hand-edit it.
+//
+// This reference exists to give modders/developers/power users the complete
+// schema of what State::Load()/Menu::Load()/Feature::LoadSettings() will
+// read back — including settings that have no menu control, or whose JSON
+// representation differs from how they're shown in the UI.
+//
+// How to read the annotations below:
+//   - "type" reflects the JSON value CS expects/writes: bool, int, uint,
+//     float, string, or an array.
+//   - floatN / ImVec2 / ImVec4 fields are serialized as plain JSON arrays,
+//     e.g. float3 {x,y,z} -> [x, y, z]  (see src/Utils/Serialize.cpp).
+//   - The value shown is the compiled-in default from the corresponding
+//     `Settings` struct (or, where noted, the ENB-derived default baked into
+//     the feature's .ini at /features/<Feature>/Shaders/Features/*.ini —
+//     these can differ from the struct default).
+//   - Every feature settings block is parsed via
+//     NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT (or an equivalent
+//     hand-written loader that checks `contains()`/type before reading), so
+//     missing keys silently fall back to defaults — partially hand-edited or
+//     stale files are safe to load (and a parse error simply triggers
+//     RestoreDefaultSettings() + a config rewrite).
+//   - Per-feature blocks only round-trip while the feature is *enabled*
+//     (i.e. not listed under "Disable at Boot" and successfully loaded its
+//     .ini); a disabled/unloaded feature still gets a (possibly stale or
+//     null) entry written by Feature::Save(), but it isn't parsed back.
+//   - Block order below matches Feature::GetFeatureList() registration
+//     order, which is also the order State::SaveToJson() writes them in.
+// ============================================================================
+{
+	// ------------------------------------------------------------------
+	// Menu — Menu::Settings (src/Menu.h). Hotkeys, first-run/UI flags,
+	// and the *name* of the active theme preset.
+	// ------------------------------------------------------------------
+	"Menu": {
+		// Hotkeys (Menu::Settings -> std::vector<InputCombo>). InputCombo's
+		// "smart" serializer (InputCombo::ComboList::to_json) collapses:
+		//   - empty/unbound combo            -> 0
+		//   - a single keyboard/mouse key    -> bare Win32 virtual-key code (int)
+		//   - a single VR/controller input   -> packed uint32 (device<<24 | key)
+		//   - multiple keyboard/mouse keys   -> array of bare key codes
+		//   - any VR/mixed combo             -> array of packed uint32 values
+		// On load, legacy plain-integer values are auto-migrated to combos.
+		"ToggleKey": 35,                // VK_END            — open/close the CS menu
+		"SkipCompilationKey": 27,       // VK_ESCAPE         — skip shader compilation on boot
+		"EffectToggleKey": 106,         // VK_MULTIPLY       — toggle ALL features on/off
+		"OverlayToggleKey": 121,        // VK_F10            — toggle all on-screen overlays
+		"ShaderBlockPrevKey": 33,       // VK_PRIOR (PgUp)   — debug: cycle shader blocking backward
+		"ShaderBlockNextKey": 34,       // VK_NEXT  (PgDn)   — debug: cycle shader blocking forward
+		"CSEditorToggleKey": [16, 35],  // Shift + VK_END    — open/close the CS (weather) Editor
+		"ScreenshotKey": 44,            // VK_SNAPSHOT (PrtScn) — capture a screenshot
+
+		"EnableShaderBlocking": false,        // bool — enable the debug shader-blocking hotkeys above
+		"FirstTimeSetupCompleted": false,     // bool — set true after the first-run wizard finishes; gates the default-theme bootstrap
+		"SkipClearCacheConfirmation": false,  // bool — skip the "are you sure" dialog when clearing the shader cache
+		"AutoHideFeatureList": false,         // bool — auto-hide the left feature-list panel, reveal on hover
+		"SkipConstraintWarning": false,       // bool — suppress the popup shown when a setting change creates new feature constraints
+		"RequireShiftToDock": true,           // bool — require holding Shift to dock/undock ImGui windows (prevents accidental docking)
+		"UseResolutionFont": true,            // bool — scale runtime font size with screen resolution (FontSize is zeroed when this is on, for back-compat)
+
+		// NOTE: "Theme" is intentionally NOT written here — Menu::Save()
+		// explicitly erases it before serializing. The full ThemeSettings
+		// object (palette colors, fonts, ImGuiStyle, etc.) lives only in
+		// theme *preset* files under .../CommunityShaders/Themes/<name>.json
+		// (created/edited via the in-game Theme Editor). Only the preset's
+		// *name* is persisted here:
+		"SelectedThemePreset": "Default"  // string — name of the active theme preset ("" = custom/unsaved theme)
+	},
+
+	// ------------------------------------------------------------------
+	// Advanced — shader-cache/compiler & diagnostic toggles
+	// (State::SaveToJson "Advanced" block).
+	// ------------------------------------------------------------------
+	"Advanced": {
+		"Dump Shaders": false,                  // bool  — ShaderCache::IsDump(); dump compiled shader blobs to disk for debugging
+		"Log Level": 2,                         // int   — spdlog::level enum: 0=trace 1=debug 2=info(default) 3=warn 4=err 5=critical 6=off
+		"Shader Defines": "",                   // string — extra HLSL #define list appended to every shader compile (semicolon/comma separated, see hlslkit-generate-defines)
+		"Compiler Threads": 4,                  // int   — ShaderCache::compilationThreadCount; defaults to GetDefaultCompilationThreadCount(), clamped to [1, hardware_concurrency()] on load
+		"Background Compiler Threads": 2,       // int   — ShaderCache::backgroundCompilationThreadCount; defaults to max(performance core count / 2, 1), same clamp on load
+		"Use FileWatcher": false,               // bool  — ShaderCache::UseFileWatcher(); auto-recompile shaders when their source files change on disk (dev workflow)
+		"Frame Annotations": false,             // bool  — State::frameAnnotations; enable RenderDoc-style per-pass debug markers/regions
+		"Partial Precision": false              // bool  — State::enablePartialPrecision; compile shaders with partial (min16float) precision where supported
+	},
+
+	// ------------------------------------------------------------------
+	// General — global shader-cache behaviour & localization
+	// (State::SaveToJson "General" block).
+	// ------------------------------------------------------------------
+	"General": {
+		"Enable Shaders": true,         // bool — ShaderCache::IsEnabled(); master switch for the whole replacement-shader pipeline
+		"Enable Disk Cache": true,      // bool — ShaderCache::IsDiskCache(); persist compiled shader blobs to disk between sessions
+		"Skip Unchanged Shaders": true, // bool — ShaderCache::IsSkipUnchangedShaders(); only recompile a disk-cached shader if its source changed
+		"Enable Async": true,           // bool — ShaderCache::IsAsync(); compile shaders on background threads instead of blocking the render thread
+		"Language": "en"                // string — I18n locale code; matches a Translations/<code>.json (falls back to English for missing keys)
+	},
+
+	// ------------------------------------------------------------------
+	// Upscaling — Upscaling::Settings (src/Features/Upscaling.h).
+	// Written/read at the SAME key as the per-feature block below
+	// ("Upscaling" == GetShortName() == GetName()); State saves it
+	// explicitly before the feature loop, Feature::Save then overwrites
+	// it again with identical content.
+	// ------------------------------------------------------------------
+	"Upscaling": {
+		"upscaleMethod": 3,                  // uint — UpscaleMethod enum for the "DLSS available" path: 0=None 1=TAA 2=FSR 3=DLSS(default)
+		"upscaleMethodNoDLSS": 2,            // uint — UpscaleMethod enum used when DLSS is unavailable: defaults to 2=FSR
+		"qualityMode": 1,                    // uint — upscaler quality preset: 0=Native AA 1=Quality(default) 2=Balanced 3=Performance 4=Ultra Performance
+		"frameLimitMode": 1,                 // uint — Streamline frame-rate limiter mode
+		"frameGenerationMode": 1,            // uint — Streamline DLSS/FSR Frame Generation mode
+		"frameGenerationForceEnable": 0,     // uint — force-enable frame generation even when the runtime advises against it
+		"frameGenerationAllowInMenus": false,// bool — allow frame generation to remain active while game menus are open
+		"streamlineLogLevel": 0,             // uint — NVIDIA Streamline log verbosity: 0=Off 1=Default 2=Verbose
+		"sharpnessFSR": 0.0,                 // float — AMD FSR sharpening amount [0,1]
+		"sharpnessDLSS": 0.0,                // float — NVIDIA DLSS sharpening amount [0,1]
+		"presetDLSS": 0,                     // uint — DLSS model preset override: 0=Default 1=J 2=K 3=L 4=M
+		"reflexLowLatencyMode": false,       // bool — NVIDIA Reflex low-latency mode
+		"reflexLowLatencyBoost": false,      // bool — NVIDIA Reflex low-latency boost (higher GPU clocks at idle)
+		"reflexUseMarkersToOptimize": false, // bool — let Reflex use render-pipeline markers to further reduce latency
+		"reflexUseFPSLimit": false,          // bool — enable Reflex's own FPS limiter
+		"reflexFPSLimit": 60.0               // float — target FPS for the Reflex limiter
+	},
+
+	// ------------------------------------------------------------------
+	// Replace Original Shaders — per-vanilla-shader-class replacement
+	// toggle (State::enabledClasses[], indexed by RE::BSShader::Type).
+	// All default to true (full replacement); flipping one off makes CS
+	// fall back to the game's own version of that shader class.
+	// ------------------------------------------------------------------
+	"Replace Original Shaders": {
+		"Grass": true,
+		"Sky": true,
+		"Water": true,
+		"BloodSplatter": true,
+		"ImageSpace": true,
+		"Lighting": true,
+		"Effect": true,
+		"Utility": true,
+		"DistantTree": true,
+		"Particle": true
+		// NOTE: BSShader::Type::None and ::Total are skipped — they aren't
+		// real replaceable shader classes (see State::ForEachValidShaderType).
+	},
+
+	// ------------------------------------------------------------------
+	// Disable at Boot — per-feature "don't even try to load this"
+	// switch (State::disabledFeatures, keyed by Feature::GetShortName()).
+	// A feature missing from this map is treated as enabled UNLESS its
+	// IsDisabledByDefault() returns true, in which case it is implicitly
+	// added here as `true` the first time settings are saved. Toggled via
+	// each feature's "Disable at Boot" button in the menu (restart required).
+	// Below is an illustrative (non-exhaustive) sample — any registered
+	// feature's GetShortName() is a valid key here.
+	// ------------------------------------------------------------------
+	"Disable at Boot": {
+		"Bloom": false,
+		"DynamicCubemaps": false,
+		"ScreenSpaceShadows": false,
+		"VolumetricLighting": false,
+		"UnifiedWater": true   // example: a feature that ships with IsDisabledByDefault() == true
+	},
+
+	// String — Plugin::VERSION at the time settings were last saved. CS
+	// compares this to the running version on load and silently re-saves
+	// (upgrades) the file if they differ.
+	"Version": "1.0.0",
+
+	// ====================================================================
+	// Per-feature settings blocks. Key = Feature::GetName() (the display
+	// name shown in the feature list, NOT GetShortName()/the .ini name).
+	// Each block is the feature's `Settings` struct (or hand-rolled
+	// equivalent), serialized verbatim by Feature::SaveSettings().
+	// ====================================================================
+
+	// TruePBR::Settings (src/TruePBR.h) — Physically Based Rendering material pipeline
+	"True PBR": {
+		"VertexAOStrength": 1.0  // float — strength of vertex-color ambient occlusion on PBR materials
+		// (struct is `alignas(16)` with a trailing uint pad[3] for the GPU CB layout — not user-facing/serialized)
+	},
+
+	// Feature has NO persisted settings (uses base Feature::SaveSettings(), a
+	// no-op) — Feature::Save() still writes the key, so it round-trips as
+	// JSON null. LoadSettings()/SaveSettings() are explicitly empty no-ops.
+	"Volumetric Shadows": null,
+
+	// GrassLighting::Settings (src/Features/GrassLighting.h)
+	"Grass Lighting": {
+		"Glossiness": 20.0,                      // float — specular glossiness/sharpness exponent for grass
+		"SpecularStrength": 0.5,                 // float — specular highlight intensity multiplier
+		"SubsurfaceScatteringAmount": 1.0,       // float — amount of light bleed-through for thin grass blades
+		"OverrideComplexGrassSettings": false,   // uint(bool) — override per-mesh "complex grass" lighting params with the values below
+		"BasicGrassBrightness": 1.0,             // float — brightness multiplier applied to non-complex grass
+		"ComplexGrassThreshold": 0.03            // float — alpha threshold below which grass is treated as "basic" rather than "complex"
+	},
+
+	// GrassCollision::Settings (src/Features/GrassCollision.h)
+	"Grass Collision": {
+		"EnableGrassCollision": true, // bool — push grass aside around moving actors/objects
+		"TrackRagdolls": true,        // bool — also let ragdolled actors influence grass collision
+		"EnableBlur": true            // bool — soften the collision falloff (NOTE: present in the struct but NOT in the NLOHMANN field list, so it is NOT persisted/loaded — always resets to its compiled-in default)
+	},
+
+	// ScreenSpaceShadows::BendSettings (src/Features/ScreenSpaceShadows.h) —
+	// ported from Bend Studio's screen-space shadow technique. Saved/loaded
+	// directly as the top-level object (`o_json = bendSettings;`), no nesting.
+	"Screen Space Shadows": {
+		"Enable": 1,                 // uint(bool) — master enable for screen-space contact shadows
+		"SampleCount": 1,            // uint — number of depth samples per shadow ray (higher = sharper/costlier)
+		"SurfaceThickness": 0.02,    // float — assumed surface thickness for occlusion testing (VR default 0.010)
+		"BilinearThreshold": 0.02,   // float — depth-difference threshold for the bilinear sample rejection
+		"ShadowContrast": 1.0        // float — output contrast curve applied to the shadow term (VR default 4.0)
+	},
+
+	// ExtendedMaterials::Settings (src/Features/ExtendedMaterials.h) — Complex
+	// Material / Parallax (POM) pipeline. `alignas(16)`, GPU constant-buffer-shaped.
+	"Extended Materials": {
+		"EnableComplexMaterial": 1,     // uint(bool) — enable Complex Material (PBR-ish env-mask) rendering
+		"EnableParallax": 1,            // uint(bool) — enable Parallax Occlusion Mapping on supported materials
+		"EnableTerrain": 0,             // uint(bool) — also apply parallax to terrain
+		"EnableHeightBlending": 1,      // uint(bool) — blend parallax heights across texture layers
+		"EnableShadows": 1,             // uint(bool) — let parallax-displaced surfaces self-shadow
+		"ExtendShadows": 1,             // uint(bool) — extend shadow casting to additional shader types
+		"EnableParallaxWarpingFix": 1   // uint(bool) — corrects UV warping artifacts at steep view angles with POM
+		// trailing `float pad[1]` exists only for the 16-byte CB alignment — not serialized
+	},
+
+	// WetnessEffects::Settings + nested DebugSettings (src/Features/WetnessEffects.h)
+	// — rain wetness/puddles/shore wetness and the raindrop FX subsystem (splashes, ripples).
+	"Wetness Effects": {
+		"EnableWetnessEffects": true,   // uint(bool) — master enable for the whole wetness system
+		"MaxRainWetness": 1.0,          // float — peak wetness amount while standing in rain
+		"MaxPuddleWetness": 1.5,        // float — peak wetness contribution from nearby puddles
+		"MaxShoreWetness": 1.0,         // float — peak wetness near water shorelines
+		"ShoreRange": 32,               // uint — distance (game units) over which shore wetness fades in
+		"PuddleRadius": 1.0,            // float — puddle size multiplier
+		"PuddleMaxAngle": 0.95,         // float — max surface-normal "up-facing-ness" (dot product) for puddles to form
+		"PuddleMinWetness": 0.85,       // float — minimum surface wetness required before puddles start forming
+		"MinRainWetness": 0.65,         // float — minimum wetness floor while it's raining
+		"SkinWetness": 0.95,            // float — wetness multiplier applied to skin specifically
+		"WeatherTransitionSpeed": 3.0,  // float — how quickly wetness ramps up/down across weather transitions
+
+		// Raindrop FX (screen-space raindrop ripples/splashes on surfaces)
+		"EnableRaindropFx": true,       // uint(bool) — master enable for the raindrop-impact FX subsystem
+		"EnableSplashes": true,         // uint(bool) — spawn splash decals where raindrops land
+		"EnableRipples": true,          // uint(bool) — spawn expanding ripple decals on water/wet surfaces
+		"EnableVanillaRipples": false,  // uint(bool) — keep the game's own (vanilla) rain ripples alongside CS's
+		"RaindropFxRange": 1000.0,      // float — max distance from the camera at which raindrop FX spawn
+		"RaindropGridSize": 4.0,        // float — spatial grid cell size used to distribute raindrop spawn points
+		"RaindropInterval": 1.0,        // float — time multiplier between raindrop spawns (lower = more frequent)
+		"RaindropChance": 1.0,          // float — probability multiplier that a candidate spawn actually occurs
+		"SplashesLifetime": 10.0,       // float — seconds a splash decal persists
+		"SplashesStrength": 1.05,       // float — splash decal opacity/intensity multiplier
+		"SplashesMinRadius": 0.3,       // float — minimum splash decal radius
+		"SplashesMaxRadius": 0.5,       // float — maximum splash decal radius
+		"RippleStrength": 1.0,          // float — ripple decal opacity/intensity multiplier
+		"RippleRadius": 1.0,            // float — ripple decal max radius
+		"RippleBreadth": 0.5,           // float — ripple ring thickness
+		"RippleLifetime": 0.5,          // float — seconds a ripple decal persists
+
+		// Nested DebugSettings — manually appended by SaveSettings as
+		// `o_json["DebugSettings"] = debugSettings;` (development-only overrides)
+		"DebugSettings": {
+			"EnableWetnessOverride": false,    // bool — force a fixed wetness value instead of the computed one
+			"EnablePuddleOverride": false,     // bool — force a fixed puddle-wetness value
+			"EnableRainOverride": false,       // bool — force the "is it raining" state
+			"EnableIntExOverride": false,      // bool — force the interior/exterior state
+			"WetnessOverride": [0.0, 0.0],     // float2 — [value, unused?] forced wetness amount when EnableWetnessOverride is on
+			"PuddleWetnessOverride": [0.0, 0.0], // float2 — forced puddle wetness amount
+			"RainOverride": [0.0, 0.0]         // float2 — forced rain-intensity value
+		}
+	},
+
+	// Feature has NO persisted settings (base no-op SaveSettings/LoadSettings)
+	// — its in-memory `Settings` (EnableLightsVisualisation/LightsVisualisationMode)
+	// is a runtime debug-overlay toggle only, never written to disk.
+	"Light Limit Fix": null,
+
+	// DynamicCubemaps::Settings (src/Features/DynamicCubemaps.h) — `alignas(16)`
+	"Dynamic Cubemaps": {
+		"EnabledCreator": false,                     // uint(bool) — generate dynamic reflection cubemaps from the world
+		"EnabledSSR": true                           // uint(bool) — blend in screen-space reflections to fill cubemap gaps
+		// `uint pad0[2]` and `float4 CubemapColor{1,1,1,0}` exist for the
+		// GPU CB layout / internal use — not part of the serialized field list
+	},
+
+	// CloudShadows::Settings (src/Features/CloudShadows.h) — `alignas(16)`
+	"Cloud Shadows": {
+		"Opacity": 0.8  // float — strength of cloud shadows cast on the terrain/world [0,1]
+		// trailing `float pad[3]` is GPU CB padding only
+	},
+
+	// Feature has NO persisted settings (base no-op SaveSettings/LoadSettings)
+	"Water Effects": null,
+
+	// PerformanceOverlay::Settings (src/Features/PerformanceOverlay.h) —
+	// in-game FPS/draw-call/VRAM HUD. (The struct also defines a long list of
+	// `static constexpr` threshold/layout constants — those are compile-time
+	// only and never serialized; omitted here.)
+	"Performance Overlay": {
+		"ShowInOverlay": true,             // bool — show this overlay (legacy key name was "Enabled")
+		"ShowDrawCalls": true,             // bool — show the per-shader-type draw-call breakdown table
+		"ShowVRAM": true,                  // bool — show the VRAM usage section
+		"ShowCSPasses": true,              // bool — show Community Shaders' own render-pass timings
+		"ShowFPS": true,                   // bool — show the FPS counter
+		"ShowPreFGFrameTimeGraph": true,   // bool — show the frame-time graph measured before frame generation
+		"ShowPostFGFrameTimeGraph": true,  // bool — show the frame-time graph measured after frame generation
+		"UpdateInterval": 0.5,             // float — seconds between HUD value refreshes (smoothing window)
+		"FrameHistorySize": 600,           // int — number of frames kept for the graphs (clamped to [120, 1800] = kMin/kMaxFrameHistorySize)
+		"TextSize": 1.0,                   // float — HUD text scale multiplier
+		"BackgroundOpacity": 0.5,          // float — HUD background panel opacity [0,1]
+		"ShowBorder": true,                // bool — draw a border around the HUD panel
+		"Position": [10.0, 10.0],          // ImVec2 — saved screen-space pixel position of the HUD (top-left)
+		"PositionSet": false               // bool — whether the user has manually repositioned the HUD (locks auto-placement)
+	},
+
+	// SubsurfaceScattering::Settings + nested DiffusionProfile (src/Features/SubsurfaceScattering.h)
+	"Subsurface Scattering": {
+		"EnableCharacterLighting": false,   // uint(bool) — apply SSS to character skin/flesh in addition to vanilla SSS surfaces
+		"CharacterLightingStrength": 1.0,   // float — strength multiplier for the character-lighting SSS pass
+		"SSMode": 1,                        // int — scattering algorithm: 0 = Separable SSS, 1 = Burley (default)
+		// DiffusionProfile { BlurRadius, Thickness, Strength: float3, Falloff: float3 } — Separable-SSS-mode profiles
+		"BaseProfile": { "BlurRadius": 0.5, "Thickness": 1.0, "Strength": [0.48, 0.41, 0.28], "Falloff": [0.56, 0.56, 0.56] },
+		"HumanProfile": { "BlurRadius": 0.5, "Thickness": 1.0, "Strength": [0.48, 0.41, 0.28], "Falloff": [1.0, 0.37, 0.3] },
+		"BurleySamples": 16,                          // uint — sample count for the Burley diffusion approximation (quality vs cost)
+		"MeanFreePathBase": [0.56, 0.56, 0.56, 2.67],  // float4 (rgb + scale) — Burley-mode mean free path for generic surfaces
+		"MeanFreePathHuman": [1.0, 0.37, 0.3, 2.67]    // float4 (rgb + scale) — Burley-mode mean free path for human skin
+	},
+
+	// TerrainShadows::Settings (src/Features/TerrainShadows.h)
+	"Terrain Shadows": {
+		"EnableTerrainShadow": true  // bool — enable precomputed terrain self-shadowing (height-map based)
+	},
+
+	// ScreenSpaceGI::Settings (src/Features/ScreenSpaceGI.h) — combined
+	// screen-space AO + global illumination pass.
+	"Screen Space GI": {
+		"Enabled": true,                      // bool — master enable for the whole SSGI/SSAO pass
+		"EnableGI": true,                     // bool — also compute global illumination, not just AO (VR default: false — AO-only)
+		"EnableExperimentalSpecularGI": false,// bool — experimental specular GI contribution (higher cost, may be unstable)
+		"EnableVanillaSSAO": false,           // bool — keep the game's own SSAO running alongside CS's
+		"NumSlices": 4,                       // uint — angular slice count for AO/GI sampling (VR default: 3)
+		"NumSteps": 8,                        // uint — radial step count per slice (VR default: 6)
+		"ResolutionMode": 1,                  // int — render resolution: 0 = full, 1 = half (default), 2 = quarter
+		"MinScreenRadius": 0.01,              // float — minimum sampling radius in screen-space (fraction of screen size)
+		"AORadius": 256.0,                    // float — world-space sampling radius for ambient occlusion
+		"GIRadius": 256.0,                    // float — world-space sampling radius for global illumination
+		"Thickness": 32.0,                    // float — assumed surface thickness used for occlusion/light-bounce tests
+		"DepthFadeRange": [40000.0, 50000.0], // float2 — [start, end] depth range over which the effect fades out at distance
+		"GISaturation": 0.8,                  // float — color saturation applied to bounced GI light
+		"GIDistanceCompensation": 0.0,        // float — compensates GI intensity falloff with sample distance
+		"AOPower": 1.0,                       // float — exponent applied to the final AO term (contrast)
+		"GIStrength": 1.0,                    // float — overall GI intensity multiplier
+		"EnableTemporalDenoiser": true,       // bool — accumulate samples across frames to reduce noise
+		"EnableBlur": true,                   // bool — apply a spatial denoising blur pass
+		"DepthDisocclusion": 0.1,             // float — depth-difference threshold for rejecting reprojected history (ghosting control)
+		"NormalDisocclusion": 0.1,            // float — normal-difference threshold for rejecting reprojected history
+		"MaxAccumFrames": 16,                 // uint — maximum number of frames blended by the temporal denoiser
+		"BlurRadius": 2.0,                    // float — spatial blur kernel radius (pixels)
+		"DistanceNormalisation": 2.0          // float — normalises sample weighting by distance for the blur/denoise passes
+	},
+
+	// Skylighting::Settings (src/Features/Skylighting.h)
+	"Skylighting": {
+		"MaxZenith": 1.5707963,           // float (radians) — maximum sky zenith angle considered for skylight occlusion (default = π/2 = 90°)
+		"MinDiffuseVisibility": 0.1,      // float — floor for diffuse sky visibility, prevents fully-black occluded diffuse lighting
+		"MinSpecularVisibility": 0.1      // float — floor for specular sky visibility, prevents fully-black occluded reflections
+	},
+
+	// SkySync::Settings (src/Features/SkySync.h) — keeps the sun/moons'
+	// visual position consistent with their lighting direction.
+	"Sky Sync": {
+		"Enabled": true,                 // bool — master enable for sun/moon position synchronization
+		"UseAlternateSunPath": true,     // bool — use one of CS's alternate sun arcs instead of vanilla
+		"MoonLightSource": 0,            // int32 — MoonLightSource enum: 0=Brightest(default) 1=Masser 2=Secunda
+		"SunPath": 0,                    // int32 — SunPath enum: 0=Southern(default) 1=Northern 2=Vanilla 3=Custom
+		"CustomAngle": -35.0,            // float (degrees) — sun arc tilt angle used when SunPath == Custom(3)
+		"SunriseBeginOffset": 0.0,       // float (game hours) — shifts when the sunrise transition begins
+		"SunriseEndOffset": 0.0,         // float (game hours) — shifts when the sunrise transition ends
+		"SunsetBeginOffset": 0.0,        // float (game hours) — shifts when the sunset transition begins
+		"SunsetEndOffset": 0.0,          // float (game hours) — shifts when the sunset transition ends
+		"MinShadowElevation": 0.25       // float — minimum sun elevation (as a 0-1 factor) before directional shadows are cast
+	},
+
+	// TerrainBlending::Settings (src/Features/TerrainBlending.h)
+	"Terrain Blending": {
+		"Enabled": true  // uint32(bool) — blend object bases smoothly into terrain instead of a hard edge
+		// trailing `uint32_t pad[3]` is GPU CB padding only
+	},
+
+	// Feature has an EMPTY `struct Settings {}` and does not override
+	// LoadSettings/SaveSettings — nothing is persisted for it.
+	"Terrain Helper": null,
+
+	// VolumetricLighting::Settings + nested TextureSize (src/Features/VolumetricLighting.h)
+	"Volumetric Lighting": {
+		"ExteriorEnabled": true,   // bool — enable volumetric lighting/god-rays outdoors
+		"ExteriorQuality": 2,      // int32 — preset quality level for exteriors (clamped to [0, Quality::Count-1] on load; higher = better/costlier)
+		// TextureSize { Width, Height, Depth } — froxel-grid resolution used when ExteriorQuality selects "Custom"
+		"ExteriorCustomSize": { "Width": 320, "Height": 192, "Depth": 90 },
+		"InteriorEnabled": true,   // bool — enable volumetric lighting indoors
+		"InteriorQuality": 2,      // int32 — preset quality level for interiors (same clamp/meaning as ExteriorQuality)
+		"InteriorCustomSize": { "Width": 320, "Height": 192, "Depth": 90 }
+	},
+
+	// LODBlending::Settings (src/Features/LODBlending.h)
+	"LOD Blending": {
+		"LODTerrainBrightness": 1.0,         // float — brightness multiplier for terrain LOD meshes
+		"LODObjectBrightness": 1.0,          // float — brightness multiplier for object LOD meshes
+		"LODObjectSnowBrightness": 1.0,      // float — brightness multiplier for snow-covered object LOD meshes
+		"DisableTerrainVertexColors": false, // uint(bool) — ignore baked terrain-LOD vertex colors (useful with some texture replacers)
+		"LODTerrainGamma": 1.0,              // float — gamma curve applied to terrain LOD lighting, for blending with full-detail terrain
+		"LODObjectGamma": 1.0,               // float — gamma curve applied to object LOD lighting
+		"LODObjectSnowGamma": 1.0            // float — gamma curve applied to snow-covered object LOD lighting
+		// trailing `float pad` is layout padding only
+	},
+
+	// Feature has NO persisted settings (no Settings struct, base no-op overrides)
+	"Inverse Square Lighting": null,
+
+	// HairSpecular::Settings (src/Features/HairSpecular.h) — `alignas(16)`,
+	// dual-lobe (Kajiya-Kay / Marschner) anisotropic hair shading.
+	"Hair Specular": {
+		"Enabled": true,                  // uint(bool) — master enable for the custom hair shading model
+		"HairGlossiness": 70.0,           // float — specular lobe sharpness/exponent
+		"SpecularMult": 1.0,              // float — overall specular intensity multiplier
+		"DiffuseMult": 1.0,               // float — overall diffuse intensity multiplier
+		"EnableTangentShift": true,       // uint(bool) — offset the anisotropic tangent to fake layered-strand highlights
+		"PrimaryTangentShift": 0.5,       // float — tangent-shift amount for the primary specular lobe
+		"SecondaryTangentShift": -0.25,   // float — tangent-shift amount for the secondary ("shifted") specular lobe
+		"HairSaturation": 1.0,            // float — color saturation multiplier for hair
+		"SpecularIndirectMult": 1.0,      // float — specular contribution multiplier from indirect/ambient lighting
+		"DiffuseIndirectMult": 1.0,       // float — diffuse contribution multiplier from indirect/ambient lighting
+		"BaseColorMult": 1.5,             // float — base albedo color multiplier
+		"Transmission": 1.0,              // float — light transmission-through-strand amount (back-lighting glow)
+		"EnableSelfShadow": true,         // uint(bool) — let hair strands self-shadow each other
+		"SelfShadowStrength": 1.0,        // float — self-shadow darkening strength
+		"SelfShadowExponent": 0.1,        // float — self-shadow falloff exponent
+		"SelfShadowScale": 2.5,           // float — self-shadow spatial scale
+		"HairMode": 1                     // uint — shading model: 0 = Kajiya-Kay, 1 = Marschner (default)
+		// trailing `uint pad[3]` is GPU CB padding only
+	},
+
+	// InteriorSun::Settings (src/Features/InteriorSun.h)
+	"Interior Sun": {
+		"ForceDoubleSidedRendering": true, // bool — render interior sun-lit geometry double-sided (fixes light leaking through thin meshes)
+		"InteriorShadowDistance": 5000.0   // float — max shadow draw distance for the interior "sun" light
+	},
+
+	// TerrainVariation::Settings (src/Features/TerrainVariation.h)
+	"Terrain Variation": {
+		"enableTilingFix": true,         // uint(bool) — break up repetitive terrain texture tiling patterns
+		"enableLODTerrainTilingFix": true// uint(bool) — also apply the tiling-breakup fix to terrain LOD meshes
+		// trailing `float pad0[2]` is layout padding only
+	},
+
+	// IBL::Settings (src/Features/IBL.h) — Image-Based Lighting (sky/env
+	// cubemap-driven ambient lighting). `alignas(16)`/CB-shaped.
+	"Image Based Lighting": {
+		"EnableIBL": 0,             // uint(bool) — master enable for image-based ambient lighting
+		"PreserveFogLuminance": 0,  // uint(bool) — keep fog perceived brightness constant when IBL changes overall scene luminance
+		"UseStaticIBL": 1,          // uint(bool) — use precomputed/static environment lighting instead of the live dynamic cubemap
+		"DALCAmount": 1.0,          // float — strength of "Dynamic Ambient Light Color" blending
+		"EnvIBLScale": 1.0,         // float — intensity scale for environment-cubemap-derived ambient light
+		"SkyIBLScale": 1.0,         // float — intensity scale for sky-derived ambient light
+		"EnvIBLSaturation": 1.0,    // float — color saturation of environment-derived ambient light
+		"SkyIBLSaturation": 1.0,    // float — color saturation of sky-derived ambient light
+		"FogAmount": 0.0,           // float — how much IBL contributes to fog inscattering color
+		"DALCMode": 2,              // uint — ambient color derivation mode: 0=Luminance Ratio 1=Color Ratio 2=DALC+Sky(default) 3=DALC+Sky(Directional)
+		"DisableInInteriors": 1     // uint(bool) — fall back to vanilla ambient lighting indoors
+		// trailing `float pad1` is CB padding only
+	},
+
+	// ExtendedTranslucency::Settings : PerFrame (src/Features/ExtendedTranslucency.h)
+	// — adds a fabric/cloth anisotropic translucency model on top of the
+	// vanilla alpha-blend pipeline. `alignas(16)`.
+	"Extended Translucency": {
+		"AlphaMode": 3,        // uint32 — MaterialModel enum: 0=Disabled 1=RimLight 2=IsotropicFabric 3=AnisotropicFabric(default, ignores normal map)
+		"AlphaReduction": 0.15,// float — how much the model reduces surface alpha to fake thin-material translucency
+		"AlphaSoftness": 0.0,  // float — softens/feathers the alpha falloff at silhouette edges
+		"AlphaStrength": 0.0,  // float — overall strength of the translucency effect
+		"SkinnedOnly": true    // bool — restrict the effect to skinned (actor) meshes only, skipping static translucent objects
+	},
+
+	// RenderDoc::Settings — hand-rolled (NOT NLOHMANN-macro) serialization
+	// in RenderDoc::SaveSettings/LoadSettings (src/Features/RenderDoc.cpp).
+	"RenderDoc": {
+		"Enable RenderDoc Capture": false, // bool — arm RenderDoc to auto-capture frames when attached
+		"Capture Frame Count": 1           // uint — number of consecutive frames to capture per trigger (clamped to [kMinCaptureFrameCount=1, kMaxCaptureFrameCount=120])
+	},
+
+	// CSEditor — only persists the floating "Weather Details" sub-window's
+	// placement (CSEditor::WeatherDetailsWindowSettings, src/Features/CSEditor.h).
+	// The editor's actual weather/lighting/image-space edits are saved as
+	// separate plugin/override files, not into SettingsUser.json.
+	"CS Editor": {
+		"Enabled": false,         // bool — whether the Weather Details sub-window is currently open
+		"ShowInOverlay": false,   // bool — mirror the sub-window's content into the global overlay HUD
+		"Position": [50.0, 50.0], // ImVec2 — saved screen-space pixel position of the sub-window
+		"PositionSet": false      // bool — whether the user has manually repositioned the sub-window
+	},
+
+	// ScreenshotFeature — hand-rolled serialization in
+	// ScreenshotFeature::SaveSettings/LoadSettings (src/Features/ScreenshotFeature.cpp),
+	// plus a delegated block from Utils::Subrect::Controller (crop tool).
+	"Screenshot": {
+		"ScreenshotPath": "Screenshots",     // string — output folder, relative to the game's Documents/My Games/.../ directory
+		"ApplyCropToScreenshot": true,       // bool — apply the configured crop rectangle when saving
+		"HdrPngBitDepth": 11,                // uint — bit depth for HDR PNG captures (clamped to [7, 16] on load)
+		"SdrUsePng": false,                  // bool — save SDR screenshots as PNG instead of the default format (e.g. JPG/DDS)
+		"CopyToClipboard": false,            // bool — also copy the captured image to the system clipboard
+
+		// Delegated to Utils::Subrect::Controller::SaveSettings — the crop/subrect tool
+		"CropX": 0.0,           // float — crop rectangle origin U (normalized [0,1])
+		"CropY": 0.0,           // float — crop rectangle origin V (normalized [0,1])
+		"CropW": 1.0,           // float — crop rectangle width (normalized [0,1])
+		"CropH": 1.0,           // float — crop rectangle height (normalized [0,1])
+		"CropPresets": [        // array of named crop presets (user-defined + VR-seeded defaults, e.g. "Left Eye"/"Right Eye"/"Full Frame")
+			{ "name": "Full Frame", "uv": [0.0, 0.0, 1.0, 1.0] }
+		],
+		"SelectedPresetIndex": -1 // int — index into CropPresets of the active preset (-1 = custom/no preset selected)
+	},
+
+	// LinearLighting::Settings (src/Features/LinearLighting.h) — per-channel
+	// gamma-correction & lighting-multiplier overrides for a more
+	// physically-linear lighting pipeline.
+	"Linear Lighting": {
+		"enableLinearLighting": false, // uint(bool) — master enable; reinterprets/relights vanilla assets in linear space
+
+		// Gamma curves applied per lighting/material channel before blending
+		"lightGamma": 1.8,
+		"colorGamma": 1.8,
+		"emitColorGamma": 1.8,
+		"glowmapGamma": 1.8,
+		"ambientGamma": 1.8,
+		"fogGamma": 1.97,
+		"fogAlphaGamma": 1.8,
+		"effectGamma": 1.4,
+		"effectAlphaGamma": 1.55,
+		"skyGamma": 1.8,
+		"waterGamma": 1.8,
+		"vlGamma": 1.8,
+
+		// Lighting multipliers
+		"vanillaDiffuseColorMult": 1.0,
+		"directionalLightMult": 1.0,
+		"pointLightMult": 1.0,
+		"ambientMult": 1.0,
+		"emitColorMult": 1.0,
+		"glowmapMult": 0.66,
+
+		// Effect multipliers
+		"effectLightingMult": 0.32,
+		"membraneEffectMult": 1.0,
+		"bloodEffectMult": 1.0,
+		"projectedEffectMult": 1.0,
+		"deferredEffectMult": 1.0,
+		"otherEffectMult": 1.0
+		// (all *Gamma/*Mult fields are float; the two enable-ish fields are uint(bool))
+	},
+
+	// UnifiedWater::Settings (src/Features/UnifiedWater.h)
+	"Unified Water": {
+		"UseOptimisedMeshes": true // bool — replace vanilla water plane meshes with CS's optimized/merged versions
+	},
+
+	// ExponentialHeightFog::Settings (src/Features/ExponentialHeightFog.h) —
+	// large block: replaces vanilla fog with a height-based exponential model
+	// and (optionally) a full volumetric/froxel fog pass.
+	"Exponential Height Fog": {
+		"enabled": 0,                          // uint(bool) — master enable for the exponential height-fog replacement
+		"useDynamicCubemaps": 1,               // uint(bool) — sample the dynamic cubemap for fog inscattering color
+		"startDistance": 0.0,                  // float — distance from the camera at which fog begins
+		"fogHeight": 0.0,                      // float — world-space height of the fog "sea level"
+		"fogHeightFalloff": 0.2,               // float — how quickly fog density falls off with height above fogHeight
+		"fogDensity": 0.005,                   // float — base exponential fog density
+		"directionalInscatteringMultiplier": 1.0,  // float — strength of sun-aligned inscattering ("god ray" glow in fog)
+		"directionalInscatteringAnisotropy": 0.2,  // float — forward-scattering bias (Henyey-Greenstein g) for directional inscattering
+		"inscatteringTint": [1.0, 1.0, 1.0, 1.0],  // float4 (rgba) — color tint applied to inscattered light
+		"cubemapMipLevel": 7.0,                // float — mip level sampled from the dynamic cubemap for fog color
+		"sunlightAttenuationAmount": 1.0,      // float — how strongly fog attenuates direct sunlight
+		"respectVanillaFogFade": 0,            // uint(bool) — honor the vanilla weather's near/far fog fade-distance settings
+		"disableVanillaFog": 1,                // uint(bool) — fully disable the game's own fog rendering
+		"fogInscatteringColor": [0.0, 0.0, 0.0, 1.0], // float4 (rgba) — flat fallback inscattering color (used when not deriving from sky/cubemap)
+		"originalFogColorAmount": 0.0,         // float — how much of the vanilla weather fog color to blend back in
+
+		// Volumetric (froxel-grid) fog sub-system
+		"volumetricFogEnabled": 0,                       // uint(bool) — enable the additional volumetric/froxel fog pass
+		"volumetricGridPixelSize": 16,                   // uint — screen-space pixel size of each froxel grid cell (resolution vs. cost)
+		"volumetricGridSizeZ": 64,                       // uint — number of depth slices in the froxel grid
+		"volumetricFogDistance": 60000.0,                // float — maximum draw distance of the volumetric fog
+		"volumetricFogStartDistance": 0.0,               // float — distance from the camera at which volumetric fog begins
+		"volumetricFogNearFadeInDistance": 1000.0,       // float — distance over which volumetric fog fades in near the camera (avoids near-plane artifacts)
+		"volumetricFogExtinctionScale": 1.0,             // float — light extinction (absorption+out-scatter) multiplier
+		"volumetricFogAlbedo": [1.0, 1.0, 1.0, 1.0],     // float4 (rgba) — single-scattering albedo color of the fog medium
+		"volumetricFogEmissive": [0.0, 0.0, 0.0, 0.0],   // float4 (rgba) — emissive color added by the fog medium itself
+		"volumetricDirectionalScatteringIntensity": 1.0, // float — intensity of sun-direction scattering within the volume
+		"volumetricFogScatteringDistribution": 0.2,      // float — forward-scattering bias (Henyey-Greenstein g) for the volumetric pass
+		"volumetricShadowBias": 0.002,                   // float — depth bias applied when sampling shadow maps from within the fog volume
+		"volumetricDepthDistributionScale": 8.0,         // float — controls how froxel depth slices are distributed (linear vs. exponential spacing)
+		"volumetricSkyLightingIntensity": 1.0,           // float — contribution of ambient sky lighting to the volume's scattering
+		"volumetricHistoryWeight": 0.96,                 // float — temporal-accumulation blend weight [0,1] (higher = smoother but more lag)
+		"volumetricHistoryMissSampleCount": 4,           // uint — extra samples taken when temporal history reprojection misses
+		"volumetricSampleJitterMultiplier": 0.0,         // float — per-frame sample jitter amount (dithers banding, aided by TAA)
+		"volumetricUpsampleJitterMultiplier": 1.0,       // float — jitter amount applied when upsampling the low-res froxel grid to screen
+		"volumetricLocalLightScatteringIntensity": 1.0   // float — how strongly local (point/spot) lights scatter within the volume
+		// trailing `float2 pad0` is CB padding only
+	},
+
+	// HDRDisplay::Settings (src/Features/HDRDisplay.h) — HDR10/scRGB output
+	// + automatic eye-adaptation (auto-exposure).
+	"HDR Display": {
+		"enableHDR": false,                    // bool — output in HDR (scRGB/HDR10) instead of vanilla SDR
+		"hdrPaperWhite": 203,                  // uint (nits) — reference "paper white" brightness for HDR output (ITU-R BT.2408 default)
+		"hdrPeakNits": 800,                    // uint (nits) — maximum display brightness used for HDR tone-mapping
+		"hdrUIBrightness": 1.0,                // float — UI/HUD brightness multiplier when in HDR mode (UI is normally rendered at SDR white)
+		"dontShowHDRWarning": false,           // bool — suppress the "your display may not support HDR" warning popup
+		"hdrAutoDetected": false,              // bool — internal flag: has display HDR capability auto-detection run at least once
+		"enableEyeAdaptation": true,           // bool — enable automatic exposure adaptation to scene brightness
+		"adaptationSpeedLightToDark": 1.0,     // float — speed multiplier for adapting from bright to dark scenes
+		"adaptationSpeedDarkToLight": 1.0      // float — speed multiplier for adapting from dark to bright scenes
+	},
+
+	// Skin::Settings (src/Features/Skin.h) — "Advanced Skin": physically based
+	// skin shading, peach-fuzz, dynamic sweat/wetness, and subsurface scattering tie-in.
+	"Advanced Skin": {
+		"EnableSkin": true,                          // bool — master enable for the advanced skin shading model
+		"SkinMainRoughness": 0.7,                    // float — base roughness of the primary specular lobe
+		"SkinSecondRoughness": 0.35,                 // float — base roughness of the secondary (sharper) specular lobe
+		"SkinSpecularTexMultiplier": 1.0,            // float — multiplier applied to the skin's specular mask texture
+		"SecondarySpecularStrength": 0.15,           // float — intensity of the secondary specular lobe relative to the primary
+		"F0": 0.0278,                                // float — base reflectance (Fresnel F0) for skin at normal incidence
+		"BaseColorMultiplier": 1.0,                  // float — albedo/base color brightness multiplier
+		"PhysicalMainRoughnessMultiplier": 1.3,      // float — extra roughness multiplier applied in "physical" lighting mode (primary lobe)
+		"PhysicalSecondRoughnessMultiplier": 0.75,   // float — extra roughness multiplier applied in "physical" lighting mode (secondary lobe)
+		"PhysicalSpecularStrength": 1.0,             // float — overall specular strength multiplier in "physical" lighting mode
+		"ExtraEdgeRoughness": 0.25,                  // float — additional roughness applied at grazing/silhouette angles
+		"EnableSkinDetail": true,                    // bool — overlay a fine-grained detail-normal pass (pores/micro-bumps)
+		"SkinDetailStrength": 0.25,                  // float — intensity of the detail-normal overlay
+		"SkinDetailTiling": 10.0,                    // float — tiling frequency of the detail-normal texture
+		"BodyTilingMultiplier": 2.0,                 // float — extra tiling scale applied specifically to body (vs. face) meshes
+		"ExtraSkinWetness": 0.0,                     // float — flat additive wetness applied to skin regardless of weather
+		"WetFadeTime": 10.0,                         // float (seconds) — how long dynamic sweat/wetness takes to fade out
+		"StartSweat": 0.75,                          // float — exertion threshold at which sweat begins to appear
+		"FullSweat": 0.15,                           // float — exertion delta above StartSweat at which sweat reaches full intensity
+		"WetParams": [512.0, 0.7, 10.0, 4.0],        // float4 — packed dynamic-wetness shaping parameters (tiling/contrast/sharpness/etc.)
+		"Translucency": 0.1,                         // float — subsurface light-transmission amount through thin skin areas (ears, fingers)
+		"sssWidth": 0.2,                             // float — subsurface scattering kernel width fed to the SSS pass
+		"UseSSS": true,                              // bool — feed this feature's surfaces into the Subsurface Scattering pass
+		"FuzzStrength": 1.0,                         // float — peach-fuzz (grazing-angle sheen) intensity
+		"FuzzRoughness": 0.35,                       // float — peach-fuzz lobe roughness
+		"FuzzF0": 0.045,                             // float — peach-fuzz base reflectance (Fresnel F0)
+		"UseDynamicWetness": false                   // bool — derive sweat/wetness dynamically from exertion/temperature instead of static ExtraSkinWetness
+	},
+
+	// Bloom::Settings (src/Features/Bloom.h) — "Bloom & Lens": replaces
+	// vanilla bloom with a multi-mip downsample/upsample pipeline plus
+	// optional lens-dirt/anamorphic-glare overlays (lensmask.dds).
+	"Bloom & Lens": {
+		"EnableBloom": true,        // bool — master enable for the replacement bloom pipeline
+		"BloomThreshold": 1.0,      // float — luminance threshold above which pixels start contributing to bloom
+		"BloomIntensity": 1.0,      // float — overall bloom brightness multiplier
+		"EnableLens": true,         // bool — enable lens-dirt/glare overlay (requires Data\Shaders\Bloom\lensmask.dds)
+		"GlareIntensity": 0.5,      // float — anamorphic lens-glare intensity multiplier
+		"DirtIntensity": 0.5        // float — lens-dirt overlay intensity multiplier
+	},
+
+	// Sunsprite::Settings (src/Features/Sunsprite.h) — "Sunsprite FX":
+	// dynamic screen-space sun flares projected toward screen center,
+	// occlusion-tested against the depth buffer, using enbsunsprite.dds.
+	"Sunsprite FX": {
+		"EnableSunsprite": true,     // bool — master enable for dynamic sunsprite flares
+		"SunspriteIntensity": 1.0,   // float — flare brightness multiplier
+		"SunspriteSize": 1.0         // float — flare size multiplier
+	},
+
+	// PostProcessOverlay::Settings (src/Features/PostProcessOverlay.h) —
+	// "Post Process Overlay": ENB-derived screen-space overlay effects
+	// applied to the final output texture, immediately before presentation
+	// (see HDRDisplay::Present -> PostProcessOverlay::Present).
+	"Post Process Overlay": {
+		"EnableLetterbox": false,              // bool — draw black letterbox bars (cinematic framing)
+		"LetterboxHeight": 0.1,                // float — letterbox bar height as a fraction of screen height [0, 0.5]
+		"EnableVignette": false,               // bool — darken the screen corners (vignette)
+		"VignetteAmount": 1.0,                 // float — vignette darkening strength [0, 5]
+		"EnablePostpass": false,               // bool — run a user-supplied dynamic shader from Data\Shaders\PostProcess.hlsl as an extra pass
+		                                       //         (see "docs/development/custom-postprocess-shader.md" for how to author one)
+		"EnableUnderwaterDistortion": false,   // bool — apply a wavy screen-space UV-distortion overlay (mirrors ENB's enbunderwater.fx) while the camera is below the water surface
+		"UnderwaterDistortionStrength": 1.0,   // float — distortion amplitude multiplier [0, 5]
+		"UnderwaterDistortionSpeed": 1.0       // float — distortion animation speed multiplier [0, 5]
+	},
+
+	// DepthOfField::Settings (src/Features/DepthOfField.h) — overrides the
+	// vanilla ImageSpace depth-of-field parameters per-frame (does not add a
+	// new DoF pass; see DepthOfField::Prepass / RE::ImageSpaceManager).
+	"Depth Of Field": {
+		"EnableOverride": false, // bool — override the game/weather-driven depth-of-field parameters with the fixed values below
+		"Strength": 1.0,         // float — forced DoF blur strength [0, 1]
+		"Distance": 4096.0,      // float (game units) — forced focal distance
+		"Range": 4096.0          // float (game units) — forced focal range (in-focus depth band around Distance)
+	}
+
+	// ====================================================================
+	// VR-only: "VR" — VR::Settings (src/Features/VR.h). This block is only
+	// present (and only loaded) on VR builds (REL::Module::IsVR()). It
+	// configures stereo-consistency blending, depth-buffer culling, and the
+	// VR menu/overlay system (positioning, hotkeys, controller bindings).
+	// Given its size and that it's VR-build-exclusive, it's summarized
+	// rather than fully expanded here — see VR::Settings for every field
+	// (notably: EnableDepthBufferCullingInterior/Exterior, EnableStereoBlend
+	// + StereoBlend* tuning, VRMenuScale/attachMode/VRMenu*Offset*,
+	// mouseDeadzone/mouseSpeed, EnableWandPointing, dragHighlightColor,
+	// VRMenuOpenKeys/CloseKeys/VROverlayOpenKeys/CloseKeys (InputCombo
+	// arrays, same smart serialization as the Menu hotkeys above), and
+	// comboTimeout/kAutoHideSeconds/EnableDragToReposition/etc).
+	// ====================================================================
+}

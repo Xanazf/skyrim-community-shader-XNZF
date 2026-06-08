@@ -1,4 +1,5 @@
 #include "Sunsprite.h"
+#include "Deferred.h"
 #include "Globals.h"
 #include <imgui.h>
 #include <DDSTextureLoader.h>
@@ -95,6 +96,9 @@ void Sunsprite::RenderSunsprite(ID3D11ShaderResourceView* depthSRV, ID3D11Unorde
 		context->CSSetConstantBuffers(5, 1, &sdCB);
 	}
 
+	ID3D11SamplerState* sampler = Deferred::GetSingleton()->linearSampler;
+	context->CSSetSamplers(0, 1, &sampler);
+
 	ID3D11ShaderResourceView* srvs[] = {
 		depthSRV,
 		sunspriteTextureView.get()
@@ -118,4 +122,7 @@ void Sunsprite::RenderSunsprite(ID3D11ShaderResourceView* depthSRV, ID3D11Unorde
 
 	ID3D11UnorderedAccessView* nullUAVs[] = { nullptr };
 	context->CSSetUnorderedAccessViews(0, 1, nullUAVs, nullptr);
+
+	ID3D11SamplerState* nullSampler = nullptr;
+	context->CSSetSamplers(0, 1, &nullSampler);
 }

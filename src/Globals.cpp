@@ -40,6 +40,7 @@
 #include "Features/Bloom.h"
 #include "Features/Sunsprite.h"
 #include "Features/PostProcessOverlay.h"
+#include "Features/DepthOfField.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -97,6 +98,7 @@ namespace globals
 		Bloom bloom{};
 		Sunsprite sunsprite{};
 		PostProcessOverlay postProcessOverlay{};
+		DepthOfField depthOfField{};
 
 		namespace llf
 		{

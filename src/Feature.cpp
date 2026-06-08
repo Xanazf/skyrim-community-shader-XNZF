@@ -254,7 +254,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::skin,
 		&globals::features::bloom,
 		&globals::features::sunsprite,
-		&globals::features::postProcessOverlay
+		&globals::features::postProcessOverlay,
+		&globals::features::depthOfField
 	};
 
 	if (REL::Module::IsVR()) {

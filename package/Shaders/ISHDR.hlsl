@@ -125,9 +125,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 adaptValue = max(0.001, AdaptTex.Sample(AdaptSampler, input.TexCoord).xy);
 	float2 adaptDelta = downsampledColor.xy - adaptValue;
 	float2 speeds = Param.wz;
-	if (SharedData::EnableEyeAdaptation > 0.5) {
-		float lightToDark = fmod(SharedData::AdaptationSpeeds, 1000.0);
-		float darkToLight = floor(SharedData::AdaptationSpeeds / 1000.0);
+	if (SharedData::EffectFlags & 0x1) {
+		float lightToDark = SharedData::AdaptationSpeedLightToDark;
+		float darkToLight = SharedData::AdaptationSpeedDarkToLight;
 		float dt = TimingData.x;
 		if (dt <= 0.0) dt = 0.016;
 		speeds.x = 1.0 - exp(-dt * lightToDark);
@@ -145,7 +145,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
 
 	float3 bloomColor = 0;
-	if (SharedData::EnableCustomBloom > 0.5) {
+	if (SharedData::EffectFlags & 0x2) {
 		if (Flags.x > 0.5) {
 			bloomColor = CustomBloomTex.Sample(ImageSampler, uv).xyz;
 		} else {

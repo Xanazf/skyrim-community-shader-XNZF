@@ -1,6 +1,5 @@
 #include "FrameAnnotations.h"
 #include "Globals.h"
-#include "Features/Bloom.h"
 
 #include "State.h"
 #include "Util.h"
@@ -74,98 +73,6 @@ namespace FrameAnnotations
 			globals::state->BeginPerfEvent(eventName);
 
 			func(imageSpaceShader, shape, param);
-
-			globals::state->EndPerfEvent();
-		}
-
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	template <>
-	struct BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>
-	{
-		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
-		{
-			globals::state->BeginPerfEvent("HDRTonemapBlendCinematic Draw");
-
-			ID3D11ShaderResourceView* currentSRV = nullptr;
-			globals::d3d::context->PSGetShaderResources(0, 1, &currentSRV);
-			if (currentSRV) {
-				ID3D11Resource* res = nullptr;
-				currentSRV->GetResource(&res);
-				if (res) {
-					ID3D11Texture2D* tex = nullptr;
-					if (SUCCEEDED(res->QueryInterface(IID_PPV_ARGS(&tex))) && tex) {
-						D3D11_TEXTURE2D_DESC desc;
-						tex->GetDesc(&desc);
-						globals::features::bloom.RenderBloom(currentSRV, desc.Width, desc.Height);
-						tex->Release();
-					}
-					res->Release();
-				}
-
-				auto bloomSRV = globals::features::bloom.GetBloomTextureSRV();
-				if (bloomSRV) {
-					globals::d3d::context->PSSetShaderResources(10, 1, &bloomSRV);
-				}
-
-				func(imageSpaceShader, shape, param);
-
-				if (bloomSRV) {
-					ID3D11ShaderResourceView* nullSRV = nullptr;
-					globals::d3d::context->PSSetShaderResources(10, 1, &nullSRV);
-				}
-
-				currentSRV->Release();
-			} else {
-				func(imageSpaceShader, shape, param);
-			}
-
-			globals::state->EndPerfEvent();
-		}
-
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	template <>
-	struct BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>
-	{
-		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
-		{
-			globals::state->BeginPerfEvent("HDRTonemapBlendCinematicFade Draw");
-
-			ID3D11ShaderResourceView* currentSRV = nullptr;
-			globals::d3d::context->PSGetShaderResources(0, 1, &currentSRV);
-			if (currentSRV) {
-				ID3D11Resource* res = nullptr;
-				currentSRV->GetResource(&res);
-				if (res) {
-					ID3D11Texture2D* tex = nullptr;
-					if (SUCCEEDED(res->QueryInterface(IID_PPV_ARGS(&tex))) && tex) {
-						D3D11_TEXTURE2D_DESC desc;
-						tex->GetDesc(&desc);
-						globals::features::bloom.RenderBloom(currentSRV, desc.Width, desc.Height);
-						tex->Release();
-					}
-					res->Release();
-				}
-
-				auto bloomSRV = globals::features::bloom.GetBloomTextureSRV();
-				if (bloomSRV) {
-					globals::d3d::context->PSSetShaderResources(10, 1, &bloomSRV);
-				}
-
-				func(imageSpaceShader, shape, param);
-
-				if (bloomSRV) {
-					ID3D11ShaderResourceView* nullSRV = nullptr;
-					globals::d3d::context->PSSetShaderResources(10, 1, &nullSRV);
-				}
-
-				currentSRV->Release();
-			} else {
-				func(imageSpaceShader, shape, param);
-			}
 
 			globals::state->EndPerfEvent();
 		}

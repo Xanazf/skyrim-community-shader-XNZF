@@ -41,6 +41,7 @@ struct Skin;
 struct Bloom;
 struct Sunsprite;
 struct PostProcessOverlay;
+struct DepthOfField;
 
 class State;
 class Deferred;
@@ -105,6 +106,7 @@ namespace globals
 		extern Bloom bloom;
 		extern Sunsprite sunsprite;
 		extern PostProcessOverlay postProcessOverlay;
+		extern DepthOfField depthOfField;
 
 		namespace llf
 		{

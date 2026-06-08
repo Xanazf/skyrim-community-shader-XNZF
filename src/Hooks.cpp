@@ -10,6 +10,7 @@
 #include "State.h"
 #include "Util.h"
 
+#include "Features/Bloom.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/ScreenshotFeature.h"
@@ -248,6 +249,55 @@ namespace WaterBlendHistory
 				clearColor);
 
 			func(imageSpaceShader, shape, param);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
+namespace BloomCompositor
+{
+	// Composites the physically-based bloom/lens pass into the pre-tonemap HDR
+	// scene buffer right before the engine's cinematic tonemap blend reads it.
+	// Hooked unconditionally (unlike FrameAnnotations, which is gated behind the
+	// frameAnnotations debug toggle) so Bloom actually renders for all users.
+	template <RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType>
+	struct BSImagespaceShader_Render
+	{
+		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
+		{
+			ID3D11ShaderResourceView* currentSRV = nullptr;
+			globals::d3d::context->PSGetShaderResources(0, 1, &currentSRV);
+			if (currentSRV) {
+				ID3D11Resource* res = nullptr;
+				currentSRV->GetResource(&res);
+				if (res) {
+					ID3D11Texture2D* tex = nullptr;
+					if (SUCCEEDED(res->QueryInterface(IID_PPV_ARGS(&tex))) && tex) {
+						D3D11_TEXTURE2D_DESC desc;
+						tex->GetDesc(&desc);
+						globals::features::bloom.RenderBloom(currentSRV, desc.Width, desc.Height);
+						tex->Release();
+					}
+					res->Release();
+				}
+
+				auto bloomSRV = globals::features::bloom.GetBloomTextureSRV();
+				if (bloomSRV) {
+					globals::d3d::context->PSSetShaderResources(10, 1, &bloomSRV);
+				}
+
+				func(imageSpaceShader, shape, param);
+
+				if (bloomSRV) {
+					ID3D11ShaderResourceView* nullSRV = nullptr;
+					globals::d3d::context->PSSetShaderResources(10, 1, &nullSRV);
+				}
+
+				currentSRV->Release();
+			} else {
+				func(imageSpaceShader, shape, param);
+			}
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -925,6 +975,14 @@ namespace Hooks
 		logger::info("Hooking BSImagespaceShader");
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
 		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
+
+		logger::info("Hooking Bloom compositor into HDR tonemap blend");
+		stl::write_vfunc<0x1,
+			BloomCompositor::BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematic>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematic[3]);
+		stl::write_vfunc<0x1,
+			BloomCompositor::BSImagespaceShader_Render<RE::ImageSpaceManager::ISHDRTonemapBlendCinematicFade>>(
+			RE::VTABLE_BSImagespaceShaderHDRTonemapBlendCinematicFade[3]);
 
 		logger::info("Hooking BSComputeShader");
 		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);

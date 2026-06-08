@@ -1,4 +1,5 @@
 #include "PostProcessOverlay.h"
+#include "Deferred.h"
 #include "Globals.h"
 #include "State.h"
 #include <imgui.h>
@@ -9,7 +10,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LetterboxHeight,
 	EnableVignette,
 	VignetteAmount,
-	EnablePostpass)
+	EnablePostpass,
+	EnableUnderwaterDistortion,
+	UnderwaterDistortionStrength,
+	UnderwaterDistortionSpeed)
 
 void PostProcessOverlay::RestoreDefaultSettings()
 {
@@ -42,6 +46,16 @@ void PostProcessOverlay::DrawSettings()
 
 	ImGui::Spacing();
 
+	ImGui::Checkbox("Enable Underwater Distortion", &settings.EnableUnderwaterDistortion);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Applies a wavy screen-space UV distortion (mirroring ENB's enbunderwater.fx)\nwhile the camera is below the water surface.");
+	if (settings.EnableUnderwaterDistortion) {
+		ImGui::SliderFloat("Underwater Distortion Strength", &settings.UnderwaterDistortionStrength, 0.0f, 5.0f);
+		ImGui::SliderFloat("Underwater Distortion Speed", &settings.UnderwaterDistortionSpeed, 0.0f, 5.0f);
+	}
+
+	ImGui::Spacing();
+
 	bool oldPostpass = settings.EnablePostpass;
 	if (ImGui::Checkbox("Enable Custom Postpass (PostProcess.hlsl)", &settings.EnablePostpass)) {
 		if (settings.EnablePostpass != oldPostpass && !settings.EnablePostpass) {
@@ -57,6 +71,7 @@ void PostProcessOverlay::DrawSettings()
 void PostProcessOverlay::SetupResources()
 {
 	postProcessParamsBuffer = new ConstantBuffer(ConstantBufferDesc<PostProcessParams>());
+	underwaterParamsBuffer = new ConstantBuffer(ConstantBufferDesc<UnderwaterParams>());
 }
 
 void PostProcessOverlay::ClearShaderCache()
@@ -68,6 +83,10 @@ void PostProcessOverlay::ClearShaderCache()
 	if (postpassCS) {
 		postpassCS->Release();
 		postpassCS = nullptr;
+	}
+	if (underwaterDistortionCS) {
+		underwaterDistortionCS->Release();
+		underwaterDistortionCS = nullptr;
 	}
 }
 
@@ -94,12 +113,110 @@ ID3D11ComputeShader* PostProcessOverlay::GetPostpassCS()
 	return postpassCS;
 }
 
-void PostProcessOverlay::Present(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height)
+ID3D11ComputeShader* PostProcessOverlay::GetUnderwaterDistortionCS()
 {
-	if (!settings.EnableLetterbox && !settings.EnableVignette && !settings.EnablePostpass)
+	if (!underwaterDistortionCS) {
+		logger::debug("Compiling UnderwaterDistortionCS");
+		underwaterDistortionCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PostProcessOverlay\\UnderwaterDistortionCS.hlsl", {}, "cs_5_0"));
+	}
+	return underwaterDistortionCS;
+}
+
+void PostProcessOverlay::RenderUnderwaterDistortion(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height)
+{
+	if (!settings.EnableUnderwaterDistortion)
+		return;
+
+	auto player = globals::game::player;
+	if (!player || !player->IsInWater())
+		return;
+
+	auto shader = GetUnderwaterDistortionCS();
+	if (!shader)
 		return;
 
 	auto context = globals::d3d::context;
+
+	// The distortion shader needs to sample the pre-distortion frame while
+	// writing the warped result back to the same resource, so it samples from
+	// a copy to avoid a read/write hazard on outputUAV.
+	if (!underwaterCopyTexture || underwaterCopyTexture->desc.Width != width || underwaterCopyTexture->desc.Height != height) {
+		D3D11_UNORDERED_ACCESS_VIEW_DESC outputUavDesc;
+		outputUAV->GetDesc(&outputUavDesc);
+
+		if (underwaterCopyTexture) {
+			delete underwaterCopyTexture;
+			underwaterCopyTexture = nullptr;
+		}
+
+		D3D11_TEXTURE2D_DESC desc{
+			.Width = width,
+			.Height = height,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = outputUavDesc.Format,
+			.SampleDesc = { .Count = 1 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE
+		};
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+
+		underwaterCopyTexture = new Texture2D(desc, "PostProcessOverlay::UnderwaterCopy");
+		underwaterCopyTexture->CreateSRV(srvDesc);
+	}
+
+	winrt::com_ptr<ID3D11Resource> outputResource;
+	outputUAV->GetResource(outputResource.put());
+	context->CopyResource(underwaterCopyTexture->resource.get(), outputResource.get());
+
+	context->CSSetShader(shader, nullptr, 0);
+
+	UnderwaterParams params{
+		.strength = settings.UnderwaterDistortionStrength,
+		.speed = settings.UnderwaterDistortionSpeed,
+		.timer = globals::state ? globals::state->timer : 0.0f
+	};
+	underwaterParamsBuffer->Update(params);
+	ID3D11Buffer* cb0 = underwaterParamsBuffer->CB();
+	context->CSSetConstantBuffers(0, 1, &cb0);
+
+	ID3D11SamplerState* sampler = Deferred::GetSingleton()->linearSampler;
+	context->CSSetSamplers(0, 1, &sampler);
+
+	ID3D11ShaderResourceView* srv = underwaterCopyTexture->srv.get();
+	context->CSSetShaderResources(0, 1, &srv);
+
+	ID3D11UnorderedAccessView* uavs[] = { outputUAV };
+	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+
+	uint32_t dispatchX = (width + 7) / 8;
+	uint32_t dispatchY = (height + 7) / 8;
+	context->Dispatch(dispatchX, dispatchY, 1);
+
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	context->CSSetShaderResources(0, 1, &nullSRV);
+	ID3D11SamplerState* nullSampler = nullptr;
+	context->CSSetSamplers(0, 1, &nullSampler);
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+}
+
+void PostProcessOverlay::Present(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height)
+{
+	if (!settings.EnableLetterbox && !settings.EnableVignette && !settings.EnablePostpass && !settings.EnableUnderwaterDistortion)
+		return;
+
+	auto context = globals::d3d::context;
+
+	// 0. Apply underwater screen-space distortion first so later overlays
+	// (vignette, letterbox, postpass) composite on top of the warped frame.
+	RenderUnderwaterDistortion(outputUAV, width, height);
 
 	// 1. Dispatch custom PostProcess.hlsl if enabled and compiled
 	if (settings.EnablePostpass) {

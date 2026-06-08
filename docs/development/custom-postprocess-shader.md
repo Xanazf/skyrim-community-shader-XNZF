@@ -74,14 +74,15 @@ type, and dimensionality), or the compile/dispatch will fail or read garbage.
 | ---- | -------- | ---- | ----- |
 | `b0` | Postprocess params | `cbuffer` | See layout below — the same buffer the built-in Vignette/Letterbox shader uses |
 | `b5` | Shared frame data | `cbuffer` | CS's per-frame `SharedDataCB` (camera, lighting, water, timer, etc.) — only bound if `globals::state->sharedDataCB` exists, which is always true once CS has finished initializing |
-| `t0` | *(reserved)* | `Texture2D` | Currently always bound `nullptr` — reserved for future use, do not rely on it |
+| `t0` | Filtered frame copy | `Texture2D<float4>` | A **read-only copy** of the frame as it enters your pass — see below; this is what makes neighborhood/UV-offset sampling safe |
+| `s0` | Linear sampler | `SamplerState` | Bilinear sampler bound for use with `t0` (CS's shared `Deferred::linearSampler`) |
 | `t1` | Scene depth | `Texture2D<float>` | Current scene depth buffer SRV (`Util::GetCurrentSceneDepthSRV(true)`, prefers 16-bit); `nullptr` if unavailable |
 | `t2` | Bloom texture | `Texture2D<float4>` | The Bloom & Lens feature's bloom accumulation SRV; `nullptr` if Bloom isn't loaded/enabled |
-| `u0` | Output / scene color | `RWTexture2D<float4>` | The final composited frame, read-write **in place** — read your input color from here and write your result back to the same texel |
+| `u0` | Output / scene color | `RWTexture2D<float4>` | The final composited frame, read-write **in place** — write your final result back to the same texel you're processing |
 
-All three SRV slots are explicitly cleared (`nullptr`) again immediately after
-your dispatch, and the compute shader stage itself is unbound — you don't
-need to (and shouldn't try to) clean up bindings yourself.
+All three SRV slots and the sampler are explicitly cleared (`nullptr`) again
+immediately after your dispatch, and the compute shader stage itself is
+unbound — you don't need to (and shouldn't try to) clean up bindings yourself.
 
 ### `b0` — Postprocess params
 
@@ -146,13 +147,83 @@ the comments documenting each field's exact meaning/encoding).
 > need followed by enough padding to keep later fields' offsets correct — but
 > the simplest and most robust approach is to copy the full struct verbatim.
 
+### `t0` / `s0` — filtered frame copy (the key to neighborhood sampling)
+
+`u0`/`OutputTex` is a **UAV**, and UAVs don't support `Sample`/`SampleLevel`
+— only integer-indexed `Load`/`[]`. That's fine for pure per-texel effects
+(tone/color grading, tints, vignettes), but it's the wrong tool for anything
+that needs to read *neighboring* or *fractionally-offset* texels — chromatic
+aberration, blur, distortion, bokeh-style gathers, and so on. Reading nearby
+texels of the very UAV you're concurrently writing is also an in-place
+read/write hazard with no defined ordering between threads (visible as
+flicker/banding depending on GPU/driver scheduling).
+
+To solve this, CS hands you a **read-only snapshot** of the frame as it
+stands entering your pass — a regular filterable `Texture2D<float4>` at `t0`,
+plus a bilinear `SamplerState` at `s0` (the same shared linear sampler CS
+uses internally, e.g. in `UnderwaterDistortionCS.hlsl`):
+
+```hlsl
+Texture2D<float4> SourceTex : register(t0);
+SamplerState LinearSampler : register(s0);
+RWTexture2D<float4> OutputTex : register(u0);
+
+[numthreads(8, 8, 1)]
+void main(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint width, height;
+    OutputTex.GetDimensions(width, height);
+    if (dispatchThreadID.x >= width || dispatchThreadID.y >= height)
+        return;
+
+    float2 uv = (float2(dispatchThreadID.xy) + 0.5) / float2(width, height);
+
+    // Sample t0 (filtered, hazard-free) for your input -- including any
+    // offset/neighborhood taps -- then write the final result to u0.
+    float4 color = SourceTex.SampleLevel(LinearSampler, uv, 0);
+    OutputTex[dispatchThreadID.xy] = color;
+}
+```
+
+**The pattern: read from `t0` via `SampleLevel`, write to `u0` via `[]`.**
+This is exactly how CS's own underwater distortion pass works — it copies the
+output into a scratch texture, samples that with a linear sampler at warped
+UVs, and writes the result back to the original UAV. You get the same
+copy-and-replace setup for free.
+
+A chromatic aberration effect, for example, becomes a few lines:
+
+```hlsl
+float2 centerUV = uv - 0.5;
+float2 offset = centerUV * 0.004; // aberration strength
+float r = SourceTex.SampleLevel(LinearSampler, uv - offset, 0).r;
+float g = SourceTex.SampleLevel(LinearSampler, uv,          0).g;
+float b = SourceTex.SampleLevel(LinearSampler, uv + offset, 0).b;
+OutputTex[dispatchThreadID.xy] = float4(r, g, b, 1.0);
+```
+
+Two things to keep in mind:
+
+-   **It reflects *your* pass's input, not the original frame.** The copy is
+    refreshed immediately before your dispatch, after underwater distortion
+    has already run (and before the built-in vignette/letterbox) — see
+    [Pipeline position](#pipeline-position). If underwater distortion is
+    active and you're underwater, `t0` already contains the warped frame.
+-   **It costs one full-screen `CopyResource`**, paid only while your pass is
+    enabled and compiled — the same bounded, opt-in cost the built-in
+    underwater distortion pays today. You don't need to (and can't) avoid it
+    by skipping `t0` in your shader; CS refreshes it unconditionally so it's
+    always valid to read.
+
 ### `t1` / `t2` — depth and bloom
 
 ```hlsl
 Texture2D<float> DepthTex : register(t1);
 Texture2D<float4> BloomTex : register(t2);
-SamplerState LinearSampler; // declare your own if you need to sample — none is bound for you
 ```
+
+Sample these with the same `s0` linear sampler if you need filtering — there
+is no separate sampler bound for them.
 
 Both can be `nullptr` (e.g., Bloom disabled, or depth unavailable in some edge
 cases) — a `nullptr` SRV bound to a `Texture2D` register reads as all-zero in
@@ -169,10 +240,17 @@ may need adapting for a standalone file).
 ### `u0` — output
 
 `OutputTex` is the fully-composited HDR/SDR scene color, immediately before
-Skyrim's own UI/menus are drawn on top. Read your input with
-`OutputTex[dispatchThreadID.xy]`, transform it, and write the result back to
-the same texel — there is no separate input texture, this is an in-place
-read-modify-write target.
+Skyrim's own UI/menus are drawn on top, bound **read-write in place**. You
+must always write your final result here, at
+`OutputTex[dispatchThreadID.xy]`.
+
+For pure per-texel effects (no neighborhood/offset sampling — tints, curves,
+vignettes), it's perfectly fine to also *read* your input straight from
+`OutputTex[dispatchThreadID.xy]`, exactly like the tint example below does.
+But the moment you need to sample at a different UV than the texel you're
+writing — even a fractional offset for filtering — switch to reading from
+`t0`/`SourceTex` instead (see above); reading neighbors of the same UAV
+you're writing is an undefined-ordering hazard.
 
 ## Pipeline position
 

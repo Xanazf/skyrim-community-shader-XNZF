@@ -49,6 +49,16 @@ struct PostProcessOverlay : public Feature
 	ID3D11ComputeShader* GetPostpassCS();
 	ID3D11ComputeShader* GetUnderwaterDistortionCS();
 
+	// Lazily (re)creates frameCopyTexture to match outputUAV's format/size,
+	// copies outputUAV's current contents into it, and returns its SRV --
+	// ready to bind alongside a linear sampler for filtered neighborhood
+	// sampling (chromatic aberration, blur/distortion, bokeh-style gathers,
+	// etc) without an in-place read/write hazard on outputUAV itself.
+	// Callers must re-fetch immediately before their own dispatch so the
+	// copy reflects that pass's actual input -- i.e. whatever the previous
+	// pass composited, not the original pre-overlay frame.
+	ID3D11ShaderResourceView* GetFrameCopySRV(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height);
+
 	// Hooking into post-processing right before presentation
 	void Present(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height);
 
@@ -78,10 +88,9 @@ private:
 	ConstantBuffer* postProcessParamsBuffer = nullptr;
 	ConstantBuffer* underwaterParamsBuffer = nullptr;
 
-	// Holds a copy of the output texture so the distortion shader can sample
-	// the pre-distortion frame while writing the warped result back, avoiding
-	// a read/write hazard on the same UAV resource.
-	Texture2D* underwaterCopyTexture = nullptr;
+	// Shared scratch copy of the current frame, (re)written by GetFrameCopySRV
+	// for whichever pass needs filtered input this frame.
+	Texture2D* frameCopyTexture = nullptr;
 
 	void RenderUnderwaterDistortion(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height);
 };

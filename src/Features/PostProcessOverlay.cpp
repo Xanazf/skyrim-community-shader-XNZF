@@ -122,31 +122,17 @@ ID3D11ComputeShader* PostProcessOverlay::GetUnderwaterDistortionCS()
 	return underwaterDistortionCS;
 }
 
-void PostProcessOverlay::RenderUnderwaterDistortion(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height)
+ID3D11ShaderResourceView* PostProcessOverlay::GetFrameCopySRV(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height)
 {
-	if (!settings.EnableUnderwaterDistortion)
-		return;
-
-	auto player = globals::game::player;
-	if (!player || !player->IsInWater())
-		return;
-
-	auto shader = GetUnderwaterDistortionCS();
-	if (!shader)
-		return;
-
 	auto context = globals::d3d::context;
 
-	// The distortion shader needs to sample the pre-distortion frame while
-	// writing the warped result back to the same resource, so it samples from
-	// a copy to avoid a read/write hazard on outputUAV.
-	if (!underwaterCopyTexture || underwaterCopyTexture->desc.Width != width || underwaterCopyTexture->desc.Height != height) {
+	if (!frameCopyTexture || frameCopyTexture->desc.Width != width || frameCopyTexture->desc.Height != height) {
 		D3D11_UNORDERED_ACCESS_VIEW_DESC outputUavDesc;
 		outputUAV->GetDesc(&outputUavDesc);
 
-		if (underwaterCopyTexture) {
-			delete underwaterCopyTexture;
-			underwaterCopyTexture = nullptr;
+		if (frameCopyTexture) {
+			delete frameCopyTexture;
+			frameCopyTexture = nullptr;
 		}
 
 		D3D11_TEXTURE2D_DESC desc{
@@ -166,13 +152,36 @@ void PostProcessOverlay::RenderUnderwaterDistortion(ID3D11UnorderedAccessView* o
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		underwaterCopyTexture = new Texture2D(desc, "PostProcessOverlay::UnderwaterCopy");
-		underwaterCopyTexture->CreateSRV(srvDesc);
+		frameCopyTexture = new Texture2D(desc, "PostProcessOverlay::FrameCopy");
+		frameCopyTexture->CreateSRV(srvDesc);
 	}
 
 	winrt::com_ptr<ID3D11Resource> outputResource;
 	outputUAV->GetResource(outputResource.put());
-	context->CopyResource(underwaterCopyTexture->resource.get(), outputResource.get());
+	context->CopyResource(frameCopyTexture->resource.get(), outputResource.get());
+
+	return frameCopyTexture->srv.get();
+}
+
+void PostProcessOverlay::RenderUnderwaterDistortion(ID3D11UnorderedAccessView* outputUAV, uint32_t width, uint32_t height)
+{
+	if (!settings.EnableUnderwaterDistortion)
+		return;
+
+	auto player = globals::game::player;
+	if (!player || !player->IsInWater())
+		return;
+
+	auto shader = GetUnderwaterDistortionCS();
+	if (!shader)
+		return;
+
+	auto context = globals::d3d::context;
+
+	// The distortion shader needs to sample the pre-distortion frame while
+	// writing the warped result back to the same resource, so it samples from
+	// a filtered copy to avoid a read/write hazard on outputUAV.
+	ID3D11ShaderResourceView* srv = GetFrameCopySRV(outputUAV, width, height);
 
 	context->CSSetShader(shader, nullptr, 0);
 
@@ -188,7 +197,6 @@ void PostProcessOverlay::RenderUnderwaterDistortion(ID3D11UnorderedAccessView* o
 	ID3D11SamplerState* sampler = Deferred::GetSingleton()->linearSampler;
 	context->CSSetSamplers(0, 1, &sampler);
 
-	ID3D11ShaderResourceView* srv = underwaterCopyTexture->srv.get();
 	context->CSSetShaderResources(0, 1, &srv);
 
 	ID3D11UnorderedAccessView* uavs[] = { outputUAV };
@@ -240,7 +248,13 @@ void PostProcessOverlay::Present(ID3D11UnorderedAccessView* outputUAV, uint32_t 
 				context->CSSetConstantBuffers(5, 1, &sdCB);
 			}
 
-			ID3D11ShaderResourceView* srvs[3] = { nullptr, nullptr, nullptr };
+			// t0: filtered copy of the frame as it stands entering this pass --
+			// lets the user shader safely do neighborhood/UV-offset sampling
+			// (chromatic aberration, blur/distortion, bokeh-style gathers, etc)
+			// via SampleLevel(LinearSampler, ...) without an in-place
+			// read/write hazard on outputUAV, which it must still write the
+			// final composited result back to.
+			ID3D11ShaderResourceView* srvs[3] = { GetFrameCopySRV(outputUAV, width, height), nullptr, nullptr };
 			auto depthSRV = Util::GetCurrentSceneDepthSRV(true);
 			if (depthSRV) srvs[1] = depthSRV;
 
@@ -248,6 +262,9 @@ void PostProcessOverlay::Present(ID3D11UnorderedAccessView* outputUAV, uint32_t 
 			if (bloomSRV) srvs[2] = bloomSRV;
 
 			context->CSSetShaderResources(0, 3, srvs);
+
+			ID3D11SamplerState* sampler = Deferred::GetSingleton()->linearSampler;
+			context->CSSetSamplers(0, 1, &sampler);
 
 			ID3D11UnorderedAccessView* uavs[] = { outputUAV };
 			context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
@@ -258,6 +275,8 @@ void PostProcessOverlay::Present(ID3D11UnorderedAccessView* outputUAV, uint32_t 
 
 			ID3D11ShaderResourceView* nullSRVs[] = { nullptr, nullptr, nullptr };
 			context->CSSetShaderResources(0, 3, nullSRVs);
+			ID3D11SamplerState* nullSampler = nullptr;
+			context->CSSetSamplers(0, 1, &nullSampler);
 		}
 	}
 

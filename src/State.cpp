@@ -1049,6 +1049,10 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.AmbientSHB = { dalcSH.b.c0, dalcSH.b.c1[0], dalcSH.b.c1[1], dalcSH.b.c1[2] };
 
 		data.HDRData = globals::features::hdrDisplay.GetSharedDataHDR();
+		data.EnableEyeAdaptation = globals::features::hdrDisplay.settings.enableEyeAdaptation ? 1.0f : 0.0f;
+		data.EnableCustomBloom = globals::features::bloom.settings.EnableBloom ? 1.0f : 0.0f;
+		data.AdaptationSpeeds = globals::features::hdrDisplay.settings.adaptationSpeedLightToDark +
+		                         globals::features::hdrDisplay.settings.adaptationSpeedDarkToLight * 1000.0f;
 
 		sharedDataCB->Update(data);
 	}

@@ -27,6 +27,7 @@ Texture2D<float4> AdaptTex : register(t1);
 Texture2D<float4> BlendTex : register(t1);
 #	endif
 Texture2D<float4> AvgTex : register(t2);
+Texture2D<float4> CustomBloomTex : register(t10);
 
 cbuffer PerGeometry : register(b2)
 {
@@ -123,8 +124,17 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(DOWNADAPT)
 	float2 adaptValue = max(0.001, AdaptTex.Sample(AdaptSampler, input.TexCoord).xy);
 	float2 adaptDelta = downsampledColor.xy - adaptValue;
+	float2 speeds = Param.wz;
+	if (SharedData::EnableEyeAdaptation > 0.5) {
+		float lightToDark = fmod(SharedData::AdaptationSpeeds, 1000.0);
+		float darkToLight = floor(SharedData::AdaptationSpeeds / 1000.0);
+		float dt = TimingData.x;
+		if (dt <= 0.0) dt = 0.016;
+		speeds.x = 1.0 - exp(-dt * lightToDark);
+		speeds.y = 1.0 - exp(-dt * darkToLight);
+	}
 	downsampledColor.xy =
-		sign(adaptDelta) * clamp(abs(Param.wz * adaptDelta), 0.00390625, abs(adaptDelta)) +
+		sign(adaptDelta) * clamp(abs(speeds * adaptDelta), 0.00390625, abs(adaptDelta)) +
 		adaptValue;
 #		endif
 	psout.Color = float4(downsampledColor, BlurScale.z);
@@ -135,10 +145,18 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
 
 	float3 bloomColor = 0;
-	if (Flags.x > 0.5) {
-		bloomColor = ImageTex.Sample(ImageSampler, uv).xyz;
+	if (SharedData::EnableCustomBloom > 0.5) {
+		if (Flags.x > 0.5) {
+			bloomColor = CustomBloomTex.Sample(ImageSampler, uv).xyz;
+		} else {
+			bloomColor = CustomBloomTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
+		}
 	} else {
-		bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
+		if (Flags.x > 0.5) {
+			bloomColor = ImageTex.Sample(ImageSampler, uv).xyz;
+		} else {
+			bloomColor = ImageTex.Sample(ImageSampler, input.TexCoord.xy).xyz;
+		}
 	}
 
 	float2 avgValue = AvgTex.Sample(AvgSampler, input.TexCoord.xy).xy;
@@ -223,7 +241,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	// outputColor = blendedColor; // debug: bypass color grading and hdr display mapping
 
-	psout.Color = float4(outputColor, 1.0);
+	psout.Color = float4(outputColor, BlendTex.Sample(BlendSampler, uv).a);
 
 #	endif
 

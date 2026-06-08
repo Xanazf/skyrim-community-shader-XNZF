@@ -45,6 +45,9 @@ public:
 		float hdrUIBrightness = 1.0f;     // UI brightness multiplier for HDR mode
 		bool dontShowHDRWarning = false;  // User preference to suppress HDR warning popup
 		bool hdrAutoDetected = false;     // Has auto-detection run at least once?
+		bool enableEyeAdaptation = true;
+		float adaptationSpeedLightToDark = 1.0f;
+		float adaptationSpeedDarkToLight = 1.0f;
 	};
 
 	// SharedData::HDRData.w: menu/scene path for ISHDR; HDRSun uses w>0 to scale sun toward kMenuSunNits (see HDRSun.hlsli).

@@ -44,11 +44,17 @@ option(
     "Build shader unit tests (runs automatically before packaging)"
     ON
 )
+option(
+    BUILD_PLUGIN
+    "Build the main Skyrim plugin"
+    ON
+)
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
+message("\tBuild plugin: ${BUILD_PLUGIN}")
 
 # #######################################################################################################################
 # # Build version info from git
@@ -70,7 +76,8 @@ message("\tBuild version: ${GIT_DESCRIBE}")
 # #######################################################################################################################
 # # Add CMake features
 # #######################################################################################################################
-include(XSEPlugin)
+if(WIN32 AND BUILD_PLUGIN)
+    include(XSEPlugin)
 
 # #######################################################################################################################
 # # Find dependencies
@@ -1052,6 +1059,7 @@ add_custom_command(
     COMMENT "Creating AIO zip package (manual)"
 )
 add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})
+endif() # WIN32
 
 # #######################################################################################################################
 # # Shader Unit Tests
@@ -1074,8 +1082,12 @@ if(BUILD_SHADER_TESTS)
     )
 
     # Make all package targets depend on shader tests passing
-    add_dependencies("Package-Core" run_shader_tests)
-    add_dependencies("Package-AIO-Manual" run_shader_tests)
+    if(TARGET "Package-Core")
+        add_dependencies("Package-Core" run_shader_tests)
+    endif()
+    if(TARGET "Package-AIO-Manual")
+        add_dependencies("Package-AIO-Manual" run_shader_tests)
+    endif()
     foreach(FEATURE_PATH ${FEATURE_PATHS})
         get_filename_component(FEATURE ${FEATURE_PATH} NAME)
         string(REPLACE " " "" FEATURE ${FEATURE})

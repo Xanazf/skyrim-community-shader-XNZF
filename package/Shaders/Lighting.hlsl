@@ -3437,6 +3437,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif  // ANISOTROPIC_ALPHA
 
 	psout.Diffuse.w = alpha;
+#		if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+	if (hasEmissive) {
+		psout.Diffuse.w = max(alpha, Color::RGBToLuminance(emitColor));
+	}
+#		endif
 #	endif
 
 #	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)

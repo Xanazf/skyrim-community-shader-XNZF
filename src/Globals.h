@@ -38,6 +38,9 @@ struct ExponentialHeightFog;
 struct HDRDisplay;
 struct ScreenshotFeature;
 struct Skin;
+struct Bloom;
+struct Sunsprite;
+struct PostProcessOverlay;
 
 class State;
 class Deferred;
@@ -99,6 +102,9 @@ namespace globals
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
 		extern Skin skin;
+		extern Bloom bloom;
+		extern Sunsprite sunsprite;
+		extern PostProcessOverlay postProcessOverlay;
 
 		namespace llf
 		{

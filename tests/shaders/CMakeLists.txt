@@ -14,12 +14,18 @@ message(STATUS "Configuring shader unit tests...")
 # Fetch ShaderTestFramework (which will fetch Catch2)
 include(FetchContent)
 
+set(STF_PATCH_COMMAND "")
+if(NOT MSVC)
+    set(STF_PATCH_COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/patch_stf.py)
+endif()
+
 FetchContent_Declare(
     ShaderTestFramework
     GIT_REPOSITORY https://github.com/KStocky/ShaderTestFramework.git
     # Pinned to specific commit for build reproducibility (Dec 14, 2025)
     GIT_TAG dcbe56c46d474948c27134f570c50ff7110648f6
     GIT_CONFIG core.longpaths=true  # Enable long path support for Windows
+    PATCH_COMMAND ${STF_PATCH_COMMAND}
 )
 
 FetchContent_MakeAvailable(ShaderTestFramework)
@@ -115,6 +121,10 @@ endforeach()
 
 # Link ShaderTestFramework BEFORE copying assets (so dependencies are resolved)
 target_link_libraries(shader_tests PRIVATE ShaderTestFramework)
+
+if(NOT MSVC)
+    target_link_options(shader_tests PRIVATE "-static")
+endif()
 
 # Copy all dependent assets (DLLs, shaders, etc.) - must be AFTER target_link_libraries
 copy_all_dependent_assets(shader_tests)

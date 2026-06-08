@@ -11,6 +11,8 @@
 #include "State.h"
 #include "Upscaling.h"
 #include "Util.h"
+#include "Sunsprite.h"
+#include "PostProcessOverlay.h"
 #include <algorithm>
 #include <dxgi1_4.h>
 #include <dxgi1_6.h>
@@ -294,7 +296,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	hdrPeakNits,
 	hdrUIBrightness,
 	dontShowHDRWarning,
-	hdrAutoDetected);
+	hdrAutoDetected,
+	enableEyeAdaptation,
+	adaptationSpeedLightToDark,
+	adaptationSpeedDarkToLight);
 
 void HDRDisplay::DrawSettings()
 {
@@ -563,6 +568,32 @@ void HDRDisplay::DrawSettings()
 			}
 		}
 	}
+
+	ImGui::Spacing();
+	{
+		bool currentEnable = settings.enableEyeAdaptation;
+		float currentLightToDark = settings.adaptationSpeedLightToDark;
+		float currentDarkToLight = settings.adaptationSpeedDarkToLight;
+
+		if (ImGui::TreeNodeEx("Eye Adaptation", ImGuiTreeNodeFlags_DefaultOpen)) {
+			if (ImGui::Checkbox("Enable Eye Adaptation Override", &currentEnable)) {
+				std::lock_guard<std::mutex> lock(settingsMutex);
+				settings.enableEyeAdaptation = currentEnable;
+			}
+
+			if (currentEnable) {
+				if (ImGui::SliderFloat("Light -> Dark Speed", &currentLightToDark, 0.01f, 10.0f, "%.2f")) {
+					std::lock_guard<std::mutex> lock(settingsMutex);
+					settings.adaptationSpeedLightToDark = currentLightToDark;
+				}
+				if (ImGui::SliderFloat("Dark -> Light Speed", &currentDarkToLight, 0.01f, 10.0f, "%.2f")) {
+					std::lock_guard<std::mutex> lock(settingsMutex);
+					settings.adaptationSpeedDarkToLight = currentDarkToLight;
+				}
+			}
+			ImGui::TreePop();
+		}
+	}
 }
 
 #undef I18N_KEY_PREFIX
@@ -605,6 +636,9 @@ void HDRDisplay::RestoreDefaultSettings()
 	settings.hdrPeakNits = 1000;
 	settings.hdrUIBrightness = 1.0f;
 	settings.dontShowHDRWarning = false;
+	settings.enableEyeAdaptation = true;
+	settings.adaptationSpeedLightToDark = 1.0f;
+	settings.adaptationSpeedDarkToLight = 1.0f;
 }
 
 void HDRDisplay::DataLoaded()
@@ -1278,6 +1312,15 @@ void HDRDisplay::ApplyHDR()
 		context->CSSetConstantBuffers(0, ARRAYSIZE(cbs), cbs);
 
 		context->CSSetShader(nullptr, nullptr, 0);
+	}
+
+	if (outputTexture && outputTexture->uav) {
+		auto depthSRV = Util::GetCurrentSceneDepthSRV(true);
+		uint32_t width = outputTexture->desc.Width;
+		uint32_t height = outputTexture->desc.Height;
+
+		globals::features::sunsprite.RenderSunsprite(depthSRV, outputTexture->uav.get(), width, height);
+		globals::features::postProcessOverlay.Present(outputTexture->uav.get(), width, height);
 	}
 
 	// Copy result to appropriate destination

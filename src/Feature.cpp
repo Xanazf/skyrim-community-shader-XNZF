@@ -38,6 +38,9 @@
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
+#include "Features/Bloom.h"
+#include "Features/Sunsprite.h"
+#include "Features/PostProcessOverlay.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "SettingsOverrideManager.h"
@@ -248,7 +251,10 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::unifiedWater,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
-		&globals::features::skin
+		&globals::features::skin,
+		&globals::features::bloom,
+		&globals::features::sunsprite,
+		&globals::features::postProcessOverlay
 	};
 
 	if (REL::Module::IsVR()) {

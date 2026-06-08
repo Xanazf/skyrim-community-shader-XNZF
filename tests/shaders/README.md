@@ -199,8 +199,73 @@ If you encounter `unresolved external symbol main` errors, this is due to a know
 -   Ensure D3D12-capable GPU is available
 -   Verify Graphics Tools are installed (see above)
 
+## Linux Compatibility
+
+You can configure, build, and run the shader unit tests on Linux by cross-compiling the `shader_tests` target to a Windows executable using MinGW-w64, and executing it using Wine and vkd3d-proton.
+
+### Prerequisites
+
+Install the MinGW-w64 cross-compiler and Wine on your Linux distribution:
+- **Arch Linux**: `sudo pacman -S mingw-w64-gcc wine`
+- **Ubuntu/Debian**: `sudo apt install mingw-w64 wine`
+
+You also need `d3d12.dll` and `d3d12core.dll` from a Steam Proton installation or vkd3d-proton package (to translate Direct3D 12 calls to Vulkan).
+
+### Configuration and Compilation
+
+1. Configure the build directory for cross-compilation with MinGW:
+   ```bash
+   cmake -B build-mingw \
+     -DCMAKE_SYSTEM_NAME=Windows \
+     -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+     -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+     -DBUILD_PLUGIN=OFF \
+     -DBUILD_SHADER_TESTS=ON
+   ```
+   *(Note: `BUILD_PLUGIN=OFF` is used to skip building the main Skyrim DLL, which requires MSVC-specific dependencies.)*
+
+2. Build the shader tests target:
+   ```bash
+   cmake --build build-mingw --target shader_tests
+   ```
+
+### Execution
+
+A helper script is provided at `tests/shaders/run_tests_linux.sh` to automate the execution environment. It will search for your Proton installation to locate `d3d12.dll` and `d3d12core.dll`, copy them to the build directory with appropriate casing workarounds, and run the tests.
+
+Run the script from the repository root:
+```bash
+./tests/shaders/run_tests_linux.sh
+```
+
+You can pass standard Catch2 arguments to the script, for example:
+```bash
+# Run tests with a specific tag
+./tests/shaders/run_tests_linux.sh "[math]"
+
+# List all available tags
+./tests/shaders/run_tests_linux.sh --list-tags
+```
+
+#### Manual Run (Without helper script)
+
+If you prefer to run the tests manually:
+
+1. Copy `d3d12.dll` and `d3d12core.dll` from your vkd3d-proton library directory to `build-mingw/tests/shaders/`.
+2. Overwrite `build-mingw/tests/shaders/D3D12/D3D12Core.dll` and `build-mingw/tests/shaders/D3D12/d3d12core.dll` with the vkd3d-proton version of `d3d12core.dll`.
+3. Create a lowercase symlink for the `D3D12` directory:
+   ```bash
+   cd build-mingw/tests/shaders/
+   ln -sf D3D12 d3d12
+   ```
+4. Run the executable under Wine with DLL overrides:
+   ```bash
+   WINEDLLOVERRIDES="d3d12,d3d12core=n" wine ./shader_tests.exe
+   ```
+
 ## References
 
 -   [ShaderTestFramework Documentation](https://github.com/KStocky/ShaderTestFramework/blob/main/docs/Tutorial.md)
 -   [Catch2 Documentation](https://github.com/catchorg/Catch2/tree/devel/docs)
 -   [D3D12 Documentation](https://learn.microsoft.com/en-us/windows/win32/direct3d12/directx-12-programming-guide)
+

@@ -1244,7 +1244,13 @@ PS_OUTPUT main(PS_INPUT input)
 
 #				if defined(UNDERWATER)
 	float3 finalSpecularColor = lerp(Color::Water(ShallowColor.xyz), specularColor, 0.5);
-	float3 finalColor = saturate(1 - length(input.WPosition.xyz) * 0.002) * ((1 - fresnel) * (diffuseColor - finalSpecularColor)) + finalSpecularColor;
+	float depthWS = length(input.WPosition.xyz);
+	float3 absorptionCoeff = float3(0.08, 0.024, 0.008);
+	float3 absorption = exp(-depthWS * absorptionCoeff);
+	float3 absorbedColor = diffuseColor * absorption;
+	float3 fogColor = Color::Water(DeepColor.xyz);
+	float fogFactor = 1.0 - exp(-depthWS * 0.02);
+	float3 finalColor = lerp(absorbedColor, fogColor, fogFactor) + finalSpecularColor * 0.3 * (1.0 - fogFactor);
 	// Add ripple and splash color effects for underwater
 #					if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
 	// DEBUG MODE: Override water color with debug visualization (darker for underwater)

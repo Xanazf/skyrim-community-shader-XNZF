@@ -169,7 +169,29 @@ If you run into `Access violation` build errors during step 3, you can try addin
 docker run -it --rm --isolation=process -v .:C:/skyrim-community-shaders skyrim-community-shaders:latest
 ```
 
+### Linux (Shader Unit Tests)
+
+You can cross-compile and run the standalone shader unit tests on Linux using MinGW-w64, Wine, and vkd3d-proton.
+
+1. **Configure and Build**:
+   ```bash
+   cmake -B build-mingw \
+     -DCMAKE_SYSTEM_NAME=Windows \
+     -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+     -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+     -DBUILD_PLUGIN=OFF \
+     -DBUILD_SHADER_TESTS=ON
+   cmake --build build-mingw --target shader_tests
+   ```
+2. **Run Tests**:
+   ```bash
+   ./tests/shaders/run_tests_linux.sh
+   ```
+
+For detailed instructions, including troubleshooting and case-sensitivity workarounds, see the [Shader Unit Tests README](tests/shaders/README.md).
+
 ## Debugging
+
 
 ### Launching MO2-SKSE-Skyrim from commandline
 

@@ -17,3 +17,8 @@ tests/shaders/*.exe
 tests/shaders/*.pdb
 tests/shaders/Shaders/
 tools/__pycache__/
+
+# Linux
+build-mingw/
+build.log
+vkd3d-proton.cache

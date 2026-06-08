@@ -37,6 +37,9 @@
 #include "Features/WaterEffects.h"
 #include "Features/CSEditor.h"
 #include "Features/WetnessEffects.h"
+#include "Features/Bloom.h"
+#include "Features/Sunsprite.h"
+#include "Features/PostProcessOverlay.h"
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -91,6 +94,9 @@ namespace globals
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
 		Skin skin{};
+		Bloom bloom{};
+		Sunsprite sunsprite{};
+		PostProcessOverlay postProcessOverlay{};
 
 		namespace llf
 		{

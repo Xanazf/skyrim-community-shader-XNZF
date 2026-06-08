@@ -252,7 +252,9 @@ public:
 		uint HideSky;
 		float MipBias;
 		float WaterSystemHeight;  // TES::GetWaterHeight at eye-0 in camera-relative Z; -NI_INFINITY when no water body found (VR only)
-		float3 pad0;
+		float EnableEyeAdaptation;
+		float EnableCustomBloom;
+		float AdaptationSpeeds;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;

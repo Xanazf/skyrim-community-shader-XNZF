@@ -332,6 +332,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #endif
 
-	MainRW[dispatchID.xy] = float4(color, 1.0);
+	MainRW[dispatchID.xy] = float4(color, MainRW[dispatchID.xy].w);
 	NormalTAAMaskSpecularMaskRW[dispatchID.xy] = float4(GBuffer::EncodeNormalVanilla(normalVS), 0.0, 0.0);
 }

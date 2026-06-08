@@ -169,10 +169,10 @@ docker run -it --rm --isolation=process -v .:C:/skyrim-community-shaders skyrim-
 
 ### Linux (Shader Unit Tests)
 
-> [!WARN]
+> [!WARNING]
 > THIS IS ONLY TO CHECK THAT THE SHADERS ARE GOOD.
 > IT DOES NOT BUILD THE `.dll` SKSE PLUGIN.
-> SEE [BUILD](./#_making_a_working_build_on_linux)
+> SEE [BUILD](#making-a-working-build-on-linux)
 
 You can cross-compile and run the standalone shader unit tests on Linux using MinGW-w64, Wine, and vkd3d-proton.
 
